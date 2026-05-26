@@ -1,0 +1,170 @@
+name: Scan Marketplace Images
+
+on:
+  schedule:
+    # Runs daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    # Allow manual trigger from the GitHub Actions UI
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ----------------------------------------------------------------
+      # 1. Checkout source
+      # ----------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # 2. Restore the SQLite database from the previous run (if any).
+      #    On the very first run there is no cache yet — that is fine;
+      #    the script will create a fresh database automatically.
+      # ----------------------------------------------------------------
+      - name: Restore database cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: marketplace.db
+          # restore-keys lets us pick up the most recent saved cache
+          # even when its key differs from the current run's key.
+          key: marketplace-db-${{ github.run_id }}
+          restore-keys: |
+            marketplace-db-
+
+      # ----------------------------------------------------------------
+      # 3. Python setup and dependency install
+      # ----------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ----------------------------------------------------------------
+      # 4. Run the scan
+      #    Exit code 1 means new images were found (not an error).
+      #    We capture it via || true so the step does not fail, then
+      #    store the code in GITHUB_OUTPUT for conditional steps below.
+      # ----------------------------------------------------------------
+      - name: Run marketplace scan
+        id: scan
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DB_PATH: marketplace.db
+          OUTPUT_DIR: output
+        run: |
+          cd scripts
+          python scan_marketplace.py
+          echo "scan_exit=$?" >> "$GITHUB_OUTPUT" || true
+        continue-on-error: true   # exit 1 = "new images found" — not a job failure
+
+      # ----------------------------------------------------------------
+      # 5. Check how many new images were found
+      # ----------------------------------------------------------------
+      - name: Count new images
+        id: count
+        run: |
+          count=$(python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('output/needs_validation.json'))
+              print(len(data))
+          except Exception:
+              print(0)
+          ")
+          echo "new_count=$count" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------------
+      # 6. Build the email body (Markdown → rendered as HTML by the action)
+      #    Runs only when new images were found.
+      # ----------------------------------------------------------------
+      - name: Build email body
+        if: steps.count.outputs.new_count != '0'
+        run: |
+          python3 - <<'EOF'
+          import json
+
+          with open("output/needs_validation.json", encoding="utf-8") as fh:
+              images = json.load(fh)
+
+          lines = [
+              f"## {len(images)} new Marketplace image(s) require validation\n",
+              "| Publisher | Image (Offer) | SKU | Version | Region | Date Found |",
+              "|-----------|--------------|-----|---------|--------|------------|",
+          ]
+
+          for img in images:
+              lines.append(
+                  f"| {img.get('publisher','')} "
+                  f"| {img.get('image','')} "
+                  f"| {img.get('sku','')} "
+                  f"| {img.get('version','')} "
+                  f"| {img.get('region','')} "
+                  f"| {img.get('date_added','')} |"
+              )
+
+          lines.append("\n---")
+          lines.append(
+              "_This report was generated automatically by the "
+              "[marketplace-distro-scanner](../../) GitHub Action._"
+          )
+
+          with open("/tmp/email_body.md", "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines))
+
+          print("Email body written to /tmp/email_body.md")
+          EOF
+
+      # ----------------------------------------------------------------
+      # 7. Send email via dawidd6/action-send-mail
+      #    Required GitHub Secrets:
+      #      MAIL_SERVER     — SMTP server address  (e.g. smtp.office365.com)
+      #      MAIL_PORT       — SMTP port            (e.g. 587)
+      #      MAIL_USERNAME   — SMTP login username
+      #      MAIL_PASSWORD   — SMTP login password / app password
+      #      MAIL_RECIPIENT  — Destination address  (can be a comma-separated list)
+      # ----------------------------------------------------------------
+      - name: Send email notification
+        if: steps.count.outputs.new_count != '0'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Marketplace Scanner] ${{ steps.count.outputs.new_count }} new image(s) found — validation required"
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          # Markdown body is converted to HTML by the action
+          html_body: file:///tmp/email_body.md
+          convert_markdown: true
+
+      # ----------------------------------------------------------------
+      # 8. Upload the JSON output as a workflow artifact (always, for audit)
+      # ----------------------------------------------------------------
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-scan-${{ github.run_number }}
+          path: output/needs_validation.json
+          retention-days: 30
+
+      # ----------------------------------------------------------------
+      # 9. Save updated database to cache for the next run
+      # ----------------------------------------------------------------
+      - name: Save database cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: marketplace.db
+          key: marketplace-db-${{ github.run_id }}

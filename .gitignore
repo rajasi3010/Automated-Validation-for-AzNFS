@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# SQLite database  (kept local; GH Actions uses the cache mechanism)
+*.db
+*.db-shm
+*.db-wal
+
+# Scan output  (uploaded as GH Actions artifact; not committed to history)
+output/*.json
+
+# Environment variable files
+.env
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
