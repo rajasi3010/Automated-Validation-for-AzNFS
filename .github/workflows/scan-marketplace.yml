@@ -9,7 +9,11 @@ on:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - azure-vm-marketplace
 
     steps:
       # ----------------------------------------------------------------
