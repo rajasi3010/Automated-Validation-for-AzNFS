@@ -19,10 +19,14 @@ logger = logging.getLogger(__name__)
 def get_compute_client() -> ComputeManagementClient:
     """Return an authenticated ComputeManagementClient using DefaultAzureCredential.
 
-    Local dev  : run `az login` beforehand.
-    GitHub Actions: set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID secrets.
+    Local dev: run `az login` beforehand.
+    Azure VM runner: Managed Identity is preferred.
+      - System-assigned MI works automatically.
+      - User-assigned MI can be selected with AZURE_MANAGED_IDENTITY_CLIENT_ID.
     """
-    credential = DefaultAzureCredential()
+    credential = DefaultAzureCredential(
+        managed_identity_client_id=config.AZURE_MANAGED_IDENTITY_CLIENT_ID
+    )
     return ComputeManagementClient(credential, config.AZURE_SUBSCRIPTION_ID)
 
 
@@ -80,3 +84,33 @@ def list_versions(
             location, publisher, offer, sku, exc,
         )
         return []
+
+
+_ARCH_NORMALIZE = {"x64": "x86_64", "Arm64": "arm64"}
+
+
+def get_image_architecture(
+    client: ComputeManagementClient,
+    location: str,
+    publisher: str,
+    offer: str,
+    sku: str,
+    version: str,
+) -> str:
+    """Return the architecture string ('x86_64' | 'arm64') for one image version.
+
+    Defaults to 'x86_64' if the SDK field is missing (older marketplace entries)
+    or the call fails — that's the historical default and matches what AzNFS ships.
+    """
+    try:
+        img = client.virtual_machine_images.get(
+            location, publisher, offer, sku, version
+        )
+        raw = getattr(img, "architecture", None) or "x64"
+        return _ARCH_NORMALIZE.get(raw, str(raw).lower())
+    except Exception as exc:
+        logger.warning(
+            "get_image_architecture failed — %s/%s/%s/%s: %s",
+            publisher, offer, sku, version, exc,
+        )
+        return "x86_64"

@@ -1,11 +1,13 @@
 """
 All SQLite operations for the marketplace scanner.
 
-Responsibilities:
-  - Initialize the database from schema.sql if it does not exist.
-  - Insert a new image row (validated = 'unknown') when first seen.
-  - Update last_checked on every scan for existing rows.
-  - Return the full row dict for any image so it can be written to JSON.
+Tracks one row per (publisher, image, sku, region, architecture).
+The `version` column always holds the LATEST version seen for that SKU.
+
+check_and_upsert() returns one of:
+  "new"       -> brand-new SKU; row inserted with validated='unknown'
+  "updated"   -> existing SKU got a newer version; row updated, validation state PRESERVED
+  "unchanged" -> SKU known at same/older version; only last_checked refreshed
 """
 
 import logging
@@ -15,13 +17,12 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+NEW = "new"
+UPDATED = "updated"
+UNCHANGED = "unchanged"
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
-    """Return the current UTC time as an ISO8601 string (e.g. 2026-05-26T00:00:00Z)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -31,15 +32,31 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def _lazy_migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the initial schema, for in-place upgrades."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(images)").fetchall()}
+    if not cols:
+        return
+    adds = []
+    if "architecture" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN architecture TEXT NOT NULL DEFAULT 'x86_64'")
+    if "family" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN family TEXT NOT NULL DEFAULT 'unknown'")
+    if "distro_label" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN distro_label TEXT NOT NULL DEFAULT ''")
+    if adds:
+        logger.warning(
+            "Legacy schema detected — adding new columns. "
+            "Delete the DB file for a fully-clean schema (the legacy UNIQUE "
+            "constraint cannot be altered)."
+        )
+        for stmt in adds:
+            conn.execute(stmt)
+        conn.commit()
+
 
 def initialize(db_path: str, schema_path: str) -> None:
-    """Create the database file and tables from schema.sql if they do not exist.
-
-    Safe to call on every run — all CREATE statements use IF NOT EXISTS.
-    """
+    """Create the database from schema.sql (idempotent)."""
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
@@ -51,6 +68,7 @@ def initialize(db_path: str, schema_path: str) -> None:
     try:
         conn.executescript(schema_sql)
         conn.commit()
+        _lazy_migrate(conn)
         logger.info("Database ready at %s", db_path)
     finally:
         conn.close()
@@ -63,12 +81,15 @@ def check_and_upsert(
     sku: str,
     version: str,
     region: str,
-) -> bool:
-    """Check whether this exact image tuple exists in the database.
+    architecture: str = "x86_64",
+    family: str = "unknown",
+    distro_label: str = "",
+) -> str:
+    """Upsert a SKU row, deduplicating across versions.
 
-    - If it does NOT exist: insert a new row with validated='unknown' and
-      return True  (signals that this image needs validation).
-    - If it already exists: update only last_checked and return False.
+    Returns 'new', 'updated', or 'unchanged' (see module docstring).
+    On 'updated': version + date_added + last_modified + last_checked are all
+    set to now; validated state is preserved (per design).
     """
     now = _now_iso()
     conn = _connect(db_path)
@@ -76,14 +97,14 @@ def check_and_upsert(
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id FROM images
-            WHERE publisher = ?
-              AND image     = ?
-              AND sku       = ?
-              AND version   = ?
-              AND region    = ?
+            SELECT id, version FROM images
+            WHERE publisher    = ?
+              AND image        = ?
+              AND sku          = ?
+              AND region       = ?
+              AND architecture = ?
             """,
-            (publisher, image, sku, version, region),
+            (publisher, image, sku, region, architecture),
         )
         row = cursor.fetchone()
 
@@ -91,26 +112,51 @@ def check_and_upsert(
             cursor.execute(
                 """
                 INSERT INTO images
-                    (publisher, image, sku, version, region,
+                    (publisher, image, sku, version, region, architecture,
+                     family, distro_label,
                      date_added, last_modified, last_checked, validated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unknown')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown')
                 """,
-                (publisher, image, sku, version, region, now, now, now),
+                (publisher, image, sku, version, region, architecture,
+                 family, distro_label, now, now, now),
             )
             conn.commit()
             logger.info(
-                "New image found: %s / %s / %s / %s [%s]",
-                publisher, image, sku, version, region,
+                "New SKU: %s / %s / %s [%s, %s] v%s",
+                publisher, image, sku, region, architecture, version,
             )
-            return True
+            return NEW
 
-        # Existing row — just refresh last_checked
+        # Existing SKU — compare versions lexicographically (marketplace
+        # versions are zero-padded date-style: '24.04.202405010', '9.3.2023121113').
+        if version > row["version"]:
+            cursor.execute(
+                """
+                UPDATE images
+                   SET version       = ?,
+                       date_added    = ?,
+                       last_modified = ?,
+                       last_checked  = ?,
+                       family        = ?,
+                       distro_label  = ?
+                 WHERE id = ?
+                """,
+                (version, now, now, now, family, distro_label, row["id"]),
+            )
+            conn.commit()
+            logger.info(
+                "Version bump: %s / %s / %s [%s, %s]  %s -> %s",
+                publisher, image, sku, region, architecture, row["version"], version,
+            )
+            return UPDATED
+
+        # Same or older version we've already seen.
         cursor.execute(
             "UPDATE images SET last_checked = ? WHERE id = ?",
             (now, row["id"]),
         )
         conn.commit()
-        return False
+        return UNCHANGED
 
     finally:
         conn.close()
@@ -121,23 +167,22 @@ def get_image_record(
     publisher: str,
     image: str,
     sku: str,
-    version: str,
     region: str,
+    architecture: str = "x86_64",
 ) -> dict:
-    """Return the full row for the given image as a plain Python dict."""
     conn = _connect(db_path)
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
             SELECT * FROM images
-            WHERE publisher = ?
-              AND image     = ?
-              AND sku       = ?
-              AND version   = ?
-              AND region    = ?
+            WHERE publisher    = ?
+              AND image        = ?
+              AND sku          = ?
+              AND region       = ?
+              AND architecture = ?
             """,
-            (publisher, image, sku, version, region),
+            (publisher, image, sku, region, architecture),
         )
         row = cursor.fetchone()
         return dict(row) if row else {}

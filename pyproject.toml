@@ -1,0 +1,16 @@
+[project]
+name = "marketplace-distro-scanner"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "azure-identity>=1.16.0",
+  "azure-mgmt-compute>=31.0.0",
+  "azure-communication-email>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["scripts"]
+testpaths = ["tests"]

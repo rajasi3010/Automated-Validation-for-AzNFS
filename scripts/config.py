@@ -8,12 +8,10 @@ import os
 # ---------------------------------------------------------------------------
 # Azure regions to scan
 # ---------------------------------------------------------------------------
+# AzNFS is currently validated only in eastus; expand this list if the
+# project starts publishing per-region builds.
 REGIONS = [
-    "westus3",
-    "westus2",
-    "eastus2",
     "eastus",
-    "southeastasia",
 ]
 
 # ---------------------------------------------------------------------------
@@ -28,11 +26,15 @@ PUBLISHERS = [
 
 # ---------------------------------------------------------------------------
 # Azure credentials  (set via environment; never hardcode)
-# For local dev:   run  `az login`  — DefaultAzureCredential picks it up.
-# For GH Actions:  inject AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID
-#                  as repository secrets and DefaultAzureCredential uses them.
+# For local dev:   run `az login` and DefaultAzureCredential picks it up.
+# For the Azure VM runner: prefer Managed Identity.
+#   - System-assigned MI: only AZURE_SUBSCRIPTION_ID is required.
+#   - User-assigned MI: set AZURE_MANAGED_IDENTITY_CLIENT_ID as well.
 # ---------------------------------------------------------------------------
 AZURE_SUBSCRIPTION_ID: str = os.environ["AZURE_SUBSCRIPTION_ID"]
+AZURE_MANAGED_IDENTITY_CLIENT_ID: str | None = os.environ.get(
+    "AZURE_MANAGED_IDENTITY_CLIENT_ID"
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -51,3 +53,25 @@ OUTPUT_DIR: str = os.environ.get(
 )
 
 OUTPUT_JSON: str = os.path.join(OUTPUT_DIR, "needs_validation.json")
+
+# ---------------------------------------------------------------------------
+# Notifications  (Azure Communication Services Email)
+# ---------------------------------------------------------------------------
+# ACS_ENDPOINT example: https://<resource-name>.communication.azure.com
+# ACS_SENDER  example: DoNotReply@<verified-domain>.azurecomm.net
+ACS_ENDPOINT: str = os.environ.get("ACS_ENDPOINT", "")
+ACS_SENDER: str = os.environ.get("ACS_SENDER", "")
+
+# Comma-separated recipient list (env override supported).
+_DEFAULT_RECIPIENTS = (
+    "psachdeva@microsoft.com,"
+    "rajasimandal@microsoft.com,"
+    "Shyam.Prasad@microsoft.com,"
+    "vaibsharma@microsoft.com,"
+    "t-arohi@microsoft.com"
+)
+NOTIFY_RECIPIENTS: list[str] = [
+    addr.strip()
+    for addr in os.environ.get("NOTIFY_RECIPIENTS", _DEFAULT_RECIPIENTS).split(",")
+    if addr.strip()
+]

@@ -31,6 +31,7 @@ import sys
 import config
 import azure_client
 import db_manager
+import notifier
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -92,10 +93,10 @@ def derive_family_and_distro_label(
     if p == "suse" or "sles" in o or "suse" in o or "opensuse" in o:
         match = re.search(r"(?:sles[-_]?)(\d+)", o) or re.search(r"^(\d+)", s)
         if match:
-            return "zypper", f"SLES {match.group(1)}"
+            return "yum", f"SLES {match.group(1)}"
         if "opensuse" in o:
-            return "zypper", "openSUSE"
-        return "zypper", "SUSE Linux"
+            return "yum", "openSUSE"
+        return "yum", "SUSE Linux"
 
     return "unknown", "Unknown"
 
@@ -121,6 +122,7 @@ def main() -> int:
     # Step 3+4 — Scan and compare
     # ------------------------------------------------------------------
     new_images: list[dict] = []
+    updated_images: list[dict] = []
 
     for region in config.REGIONS:
         logger.info("=== Region: %s ===", region)
@@ -140,36 +142,37 @@ def main() -> int:
                     versions = azure_client.list_versions(
                         client, region, publisher, offer, sku
                     )
+                    if not versions:
+                        continue
 
-                    for version in versions:
-                        is_new = db_manager.check_and_upsert(
-                            config.DB_PATH,
-                            publisher,
-                            offer,
-                            sku,
-                            version,
-                            region,
-                        )
-                        if is_new:
-                            record = db_manager.get_image_record(
-                                config.DB_PATH,
-                                publisher,
-                                offer,
-                                sku,
-                                version,
-                                region,
-                            )
-                            family, distro_label = derive_family_and_distro_label(
-                                record.get("publisher", ""),
-                                record.get("image", ""),
-                                record.get("sku", ""),
-                            )
-                            record["family"] = family
-                            record["distro_label"] = distro_label
-                            new_images.append(record)
+                    # Dedup: one row per (publisher, image, sku, region, arch).
+                    # Marketplace versions sort lexicographically (date-style).
+                    latest = max(versions)
+                    architecture = azure_client.get_image_architecture(
+                        client, region, publisher, offer, sku, latest
+                    )
+                    family, distro_label = derive_family_and_distro_label(
+                        publisher, offer, sku
+                    )
+
+                    status = db_manager.check_and_upsert(
+                        config.DB_PATH,
+                        publisher, offer, sku, latest, region,
+                        architecture, family, distro_label,
+                    )
+                    if status == db_manager.UNCHANGED:
+                        continue
+
+                    record = db_manager.get_image_record(
+                        config.DB_PATH, publisher, offer, sku, region, architecture,
+                    )
+                    if status == db_manager.NEW:
+                        new_images.append(record)
+                    else:  # UPDATED
+                        updated_images.append(record)
 
     # ------------------------------------------------------------------
-    # Step 5 — Write JSON output
+    # Step 5 — Write JSON output  (only new unknowns go to Phase 2)
     # ------------------------------------------------------------------
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
@@ -177,17 +180,17 @@ def main() -> int:
         json.dump(new_images, fh, indent=2)
 
     # ------------------------------------------------------------------
-    # Step 6 — Exit code
+    # Step 6 — Notify + exit code
     # ------------------------------------------------------------------
-    if new_images:
+    if new_images or updated_images:
         logger.info(
-            "Scan complete: %d new image(s) found. Output written to %s",
-            len(new_images),
-            config.OUTPUT_JSON,
+            "Scan complete: %d new + %d updated SKU(s). Output: %s",
+            len(new_images), len(updated_images), config.OUTPUT_JSON,
         )
-        return 1  # Signals GH Actions to send email notification
+        notifier.send_phase1_summary(new_images, updated_images)
+        return 1
 
-    logger.info("Scan complete: no new images found.")
+    logger.info("Scan complete: no new or updated SKUs.")
     return 0
 
 
