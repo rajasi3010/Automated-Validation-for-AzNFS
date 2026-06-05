@@ -13,10 +13,14 @@ import config
 logger = logging.getLogger(__name__)
 
 # Columns shown in the email table (order matters).
+# "image" is the Marketplace offer and is part of a SKU's identity, so it must
+# be shown — otherwise distinct rows (e.g. ubuntu-24_04-lts/server vs
+# ubuntu-25_10/server) look like duplicates.
 _EMAIL_COLUMNS = [
     "publisher",
     "family",
     "distro_label",
+    "image",
     "sku",
     "version",
     "region",
@@ -24,6 +28,11 @@ _EMAIL_COLUMNS = [
     "validated",
     "date_added",
 ]
+
+# Friendlier header labels for columns whose key name is not self-explanatory.
+_COLUMN_LABELS = {
+    "image": "image (offer)",
+}
 
 
 def _client() -> EmailClient:
@@ -35,7 +44,8 @@ def _client() -> EmailClient:
 
 def _rows_html(images: list[dict]) -> str:
     head = "".join(
-        f"<th style='text-align:left;padding:4px 8px;background:#f3f3f3'>{h}</th>"
+        f"<th style='text-align:left;padding:4px 8px;background:#f3f3f3'>"
+        f"{_COLUMN_LABELS.get(h, h)}</th>"
         for h in _EMAIL_COLUMNS
     )
     body = ""
@@ -55,7 +65,8 @@ def _rows_html(images: list[dict]) -> str:
 def _plain_rows(images: list[dict]) -> str:
     return "\n".join(
         f"- {i.get('publisher')} / {i.get('family')} / {i.get('distro_label')} / "
-        f"{i.get('sku')} v{i.get('version')} [{i.get('region')}, {i.get('architecture')}] "
+        f"{i.get('image')} / {i.get('sku')} v{i.get('version')} "
+        f"[{i.get('region')}, {i.get('architecture')}] "
         f"validated={i.get('validated')} added={i.get('date_added')}"
         for i in images
     )

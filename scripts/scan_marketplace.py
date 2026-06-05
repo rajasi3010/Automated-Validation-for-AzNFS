@@ -59,19 +59,39 @@ def derive_family_and_distro_label(
 
     # Ubuntu family
     if p == "canonical" and "ubuntu" in o:
+        # Ubuntu Core is a distinct product line (e.g. ubuntu-core-24-private).
+        if "ubuntu-core" in o:
+            match = re.search(r"ubuntu-core-(\d+)", o)
+            if match:
+                return "apt", f"Ubuntu Core {match.group(1)}"
+            return "apt", "Ubuntu Core"
+
+        # Releases are encoded as NN_NN or NN.NN in the offer (e.g.
+        # ubuntu-22_04-lts, ubuntu-pro-26_04-lts) or the SKU (e.g. 16.04-LTS).
+        match = re.search(r"(\d{2})[._](\d{2})", o) or re.search(r"(\d{2})[._](\d{2})", s)
+        if match:
+            return "apt", f"Ubuntu {match.group(1)}.{match.group(2)}"
+
+        # Older / special offers use the release codename (e.g.
+        # 0001-com-ubuntu-confidential-vm-focal).
         codename_to_version = {
-            "noble": "24.04",
-            "jammy": "22.04",
-            "focal": "20.04",
+            "xenial": "16.04",
             "bionic": "18.04",
+            "focal": "20.04",
+            "groovy": "20.10",
+            "hirsute": "21.04",
+            "impish": "21.10",
+            "jammy": "22.04",
+            "kinetic": "22.10",
+            "lunar": "23.04",
+            "mantic": "23.10",
+            "noble": "24.04",
+            "questing": "25.10",
+            "resolute": "26.04",
         }
         for codename, version in codename_to_version.items():
             if codename in o:
                 return "apt", f"Ubuntu {version}"
-
-        match = re.search(r"(\d{2})_(\d{2})", s)
-        if match:
-            return "apt", f"Ubuntu {match.group(1)}.{match.group(2)}"
 
         return "apt", "Ubuntu"
 

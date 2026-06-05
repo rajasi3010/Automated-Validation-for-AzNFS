@@ -58,6 +58,11 @@ def test_summary_with_new_only(notifier):
     assert "RHEL 9" in msg["content"]["plainText"]
     assert "x86_64" in msg["content"]["html"]
     assert "Ubuntu 24.04" in msg["content"]["html"]
+    # image (offer) must be present in both HTML and plain text — it is part of
+    # a SKU's identity, so omitting it makes distinct rows look like duplicates.
+    assert "image (offer)" in msg["content"]["html"]
+    assert "RHEL" in msg["content"]["html"]
+    assert "RHEL" in msg["content"]["plainText"]
 
 
 def test_summary_with_updates_only(notifier):
