@@ -130,8 +130,9 @@ Subject line examples:
 - `[AzNFS Phase 1] 2 version bump marketplace SKU(s)`
 - `[AzNFS Phase 1] 3 new + 2 version bumps marketplace SKU(s)`
 
-If both lists are empty no email is sent. Notification failures are caught and
-logged — they never crash the scan.
+If both lists are empty a short "no new distro releases" heartbeat email is sent
+instead, so a successful run is always confirmed. Notification failures are
+caught and logged — they never crash the scan.
 
 ## Exit codes
 

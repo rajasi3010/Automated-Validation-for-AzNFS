@@ -325,6 +325,7 @@ def main() -> int:
         "(%d new + %d updated SKU row(s), all within known releases).",
         len(new_images), len(updated_images),
     )
+    notifier.send_phase1_no_new_releases(len(new_images), len(updated_images))
     return 0
 
 

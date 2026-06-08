@@ -100,6 +100,47 @@ def send_phase1_summary(
     _send(subject, plain, html_body, recipients)
 
 
+def send_phase1_no_new_releases(
+    new_sku_count: int = 0,
+    updated_sku_count: int = 0,
+    recipients: Iterable[str] | None = None,
+) -> None:
+    """Phase 1 heartbeat: confirm the scan ran and found no new distro releases.
+
+    Sent on a clean scan so the team gets positive confirmation that the nightly
+    run executed, instead of silence. Any new/updated SKU churn that stayed
+    within already-known releases is noted for context — it needs no validation.
+    """
+    recipients = list(recipients or config.NOTIFY_RECIPIENTS)
+    if not recipients:
+        logger.warning("No recipients configured — skipping notification.")
+        return
+
+    subject = "[AzNFS Phase 1] No new distro releases to validate"
+
+    churn = ""
+    if new_sku_count or updated_sku_count:
+        churn = (
+            f" {new_sku_count} new and {updated_sku_count} updated SKU row(s) were "
+            f"seen, but all fall within already-known releases."
+        )
+
+    plain = (
+        "Marketplace scan completed successfully.\n\n"
+        f"No new distro releases need AzNFS validation.{churn}"
+    )
+
+    html_body = (
+        "<h3 style='font-family:Segoe UI,sans-serif'>No new distro releases</h3>"
+        "<p style='font-family:Segoe UI,sans-serif;color:#555'>"
+        "The marketplace scan completed successfully and found "
+        "<strong>no new distro releases</strong> to validate."
+        f"{html.escape(churn)}</p>"
+    )
+
+    _send(subject, plain, html_body, recipients)
+
+
 def _send(subject: str, plain: str, html_body: str, recipients: list[str]) -> None:
     message = {
         "senderAddress": config.ACS_SENDER,
