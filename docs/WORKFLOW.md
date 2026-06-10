@@ -3,7 +3,14 @@
 ## End-to-End Flow
 
 1. **Start job**
-   - Triggered manually (`workflow_dispatch`) or by schedule (`cron`).
+   - Canonical daily trigger: the systemd timer on the runner VM
+     (`deploy/aznfs-scan-trigger.timer`) dispatches the workflow at
+     01:23 UTC sharp via `workflow_dispatch`.
+   - Backup trigger: the GitHub `cron` (`23 1 * * *`). GitHub's hosted
+     scheduler fires it hours late at unpredictable times, so a `precheck`
+     job skips the cron run whenever a scan already ran that UTC day —
+     it only proceeds if the VM timer failed to dispatch.
+   - Manual trigger: `workflow_dispatch` from the Actions UI always runs.
 
 2. **Restore DB state**
    - GitHub Actions restores `marketplace.db` cache if available.

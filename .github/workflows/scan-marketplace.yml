@@ -5,20 +5,77 @@ env:
 
 on:
   schedule:
-    # Daily at 01:23 UTC.
+    # SAFETY NET ONLY — not the canonical daily trigger.
     #
-    # NOTE: deliberately NOT on the hour and NOT at midnight. GitHub's
-    # `schedule` trigger is best-effort: at high-load times (every :00, and
-    # 00:00 UTC most of all) queued cron runs are frequently delayed by many
-    # minutes or dropped entirely. Picking an off-peak hour and an odd minute
-    # makes the daily run fire reliably. If you need it at a different time,
-    # keep the minute non-zero and avoid the top of popular hours.
+    # GitHub's `schedule` trigger is best-effort and, for this repo, has been
+    # observed firing 9–13 hours late at effectively random times (10:35,
+    # 12:22, 12:46, 14:53 UTC for a 01:23 cron) and dropping runs outright for
+    # days at a stretch. Moving the cron off 00:00/top-of-hour restored the
+    # daily cadence but not punctuality — the delay is in GitHub's hosted
+    # scheduler queue and no cron expression fixes it.
+    #
+    # The canonical 01:23 UTC trigger is the systemd timer on the runner VM
+    # (deploy/aznfs-scan-trigger.timer), which dispatches via
+    # workflow_dispatch on time, every time. This cron is kept as a backup in
+    # case that timer silently breaks (gh token expiry, unit disabled after a
+    # reimage, …). The `precheck` job below skips a scheduled run when a scan
+    # already ran today, so the late cron no longer duplicates the timer run.
     - cron: "23 1 * * *"
   workflow_dispatch:
-    # Manual trigger from the GitHub Actions UI
+    # Manual trigger from the GitHub Actions UI, and the trigger used by the
+    # VM systemd timer (deploy/aznfs-scan-trigger.service).
+
+permissions:
+  contents: read
+  actions: read
+
+# Serialize runs so a late-fired cron can never race a timer-dispatched run
+# on the shared marketplace.db cache.
+concurrency:
+  group: marketplace-scan
+  cancel-in-progress: false
 
 jobs:
+  # ------------------------------------------------------------------
+  # Decide whether this trigger should actually scan. workflow_dispatch
+  # (VM timer or a human) always runs; a `schedule` event only runs if no
+  # scan has already run today (UTC) — i.e. only when the VM timer failed.
+  # ------------------------------------------------------------------
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.dedupe.outputs.should_run }}
+    steps:
+      - name: Skip duplicate late-fired scheduled run
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
+            echo "Trigger is ${GITHUB_EVENT_NAME}; always run."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          today=$(date -u +%F)
+          prior=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/scan-marketplace.yml/runs?created=${today}&per_page=50" \
+            --jq "[.workflow_runs[]
+                   | select(.id != ${GITHUB_RUN_ID})
+                   | select(.conclusion == \"success\"
+                            or .status == \"in_progress\"
+                            or .status == \"queued\")]
+                  | length")
+          if [ "$prior" -gt 0 ]; then
+            echo "Scan already ran (or is running) today (${prior} prior run(s)); skipping late cron fire."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No scan yet today — VM timer likely failed; running as backup."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   scan:
+    needs: precheck
+    if: needs.precheck.outputs.should_run == 'true'
     runs-on:
       - self-hosted
       - azure-vm-marketplace
