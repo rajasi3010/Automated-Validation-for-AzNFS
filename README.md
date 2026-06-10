@@ -126,10 +126,12 @@ subject:
 
 - `[AzFilesAutoPackager] 3 new distro release(s) need validation`
 
-If no new distro releases are found, **no email is sent that day**. Once per
-calendar month — on the first scan of the month with nothing new — a reminder
-lists every tracked distro release grouped by package family (`apt` / `yum`), so
-the team gets a periodic snapshot without daily noise:
+If no new distro releases are found, **no email is sent that day**. Separately,
+once per calendar month — on the first scan of the month — a reminder lists every
+tracked distro release grouped by package family (`apt` / `yum`), so the team
+gets a periodic snapshot without daily noise. This monthly snapshot is
+independent of the new-release alert: on the month's first run, if that scan also
+finds new releases, **both** emails go out.
 
 - `[AzFilesAutoPackager] Monthly reminder: 12 distro release(s) tracked`
 

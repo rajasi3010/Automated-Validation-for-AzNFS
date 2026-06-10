@@ -354,6 +354,23 @@ def main() -> int:
         d for d in distro_rollup if d["distro_label"] not in known_distros_before
     ]
 
+    # ------------------------------------------------------------------
+    # Monthly reminder — independent of the new-release alert below.
+    # ------------------------------------------------------------------
+    # Sent at most once per calendar month (UTC), on the FIRST scan of the month,
+    # regardless of whether that run also found new releases. So on the month's
+    # first run both can go out: the new-release email (if any) AND this snapshot
+    # of every tracked distro grouped by package family. The other ~29 daily runs
+    # stay silent. Using the first run of the month (not strictly the 1st) means
+    # a missed run on the 1st still sends on the next run.
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if db_manager.get_meta(config.DB_PATH, "last_monthly_reminder") != current_month:
+        buckets = buckets_by_family(all_records)
+        if buckets:
+            notifier.send_monthly_reminder(buckets)
+            db_manager.set_meta(config.DB_PATH, "last_monthly_reminder", current_month)
+            logger.info("Monthly reminder sent for %s.", current_month)
+
     if new_distros:
         logger.info(
             "Scan complete: %d new distro release(s) to validate "
@@ -368,17 +385,6 @@ def main() -> int:
         "(%d new + %d updated SKU row(s), all within known releases).",
         len(new_images), len(updated_images),
     )
-
-    # Monthly reminder: at most once per calendar month (UTC), on the first scan
-    # of the month, email a snapshot of every tracked distro grouped by package
-    # family. Daily "nothing new" runs otherwise stay silent.
-    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
-    if db_manager.get_meta(config.DB_PATH, "last_monthly_reminder") != current_month:
-        buckets = buckets_by_family(all_records)
-        if buckets:
-            notifier.send_monthly_reminder(buckets)
-            db_manager.set_meta(config.DB_PATH, "last_monthly_reminder", current_month)
-            logger.info("Monthly reminder sent for %s.", current_month)
     return 0
 
 
