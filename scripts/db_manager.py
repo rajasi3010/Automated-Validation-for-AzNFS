@@ -21,6 +21,12 @@ NEW = "new"
 UPDATED = "updated"
 UNCHANGED = "unchanged"
 
+# Phase 2 validation states written back to the `validated` column.
+KNOWN_SUPPORTED = "known_supported"
+KNOWN_UNSUPPORTED = "known_unsupported"
+UNKNOWN = "unknown"
+_VALID_STATES = {KNOWN_SUPPORTED, KNOWN_UNSUPPORTED, UNKNOWN}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -189,6 +195,59 @@ def get_image_record(
         )
         row = cursor.fetchone()
         return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def set_validation_state(
+    db_path: str,
+    identity: tuple[str, str, str, str, str],
+    state: str,
+) -> bool:
+    """Phase 2: update the validation verdict for one image row.
+
+    identity is the full row identity tuple
+    (publisher, image, sku, region, architecture) — the same key used by
+    check_and_upsert / get_image_record. ``state`` must be one of
+    'known_supported', 'known_unsupported', 'unknown'. The human-actionable
+    reason for a known_unsupported verdict is delivered by e-mail, not stored
+    here. All other Phase 1 columns are preserved.
+
+    Returns True if a row was updated, False if no matching row exists.
+    """
+    if state not in _VALID_STATES:
+        raise ValueError(
+            f"invalid validation state {state!r}; expected one of {sorted(_VALID_STATES)}"
+        )
+    publisher, image, sku, region, architecture = identity
+    now = _now_iso()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE images
+               SET validated    = ?,
+                   last_checked = ?
+             WHERE publisher    = ?
+               AND image        = ?
+               AND sku          = ?
+               AND region       = ?
+               AND architecture = ?
+            """,
+            (state, now, publisher, image, sku, region, architecture),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            logger.warning(
+                "set_validation_state: no row for %s / %s / %s [%s, %s]",
+                publisher, image, sku, region, architecture,
+            )
+            return False
+        logger.info(
+            "Validation state: %s / %s / %s [%s, %s] -> %s",
+            publisher, image, sku, region, architecture, state,
+        )
+        return True
     finally:
         conn.close()
 
