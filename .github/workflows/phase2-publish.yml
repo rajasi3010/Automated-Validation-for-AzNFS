@@ -1,0 +1,186 @@
+name: Phase 2 — Publish to PMC tux-dev
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  # Run automatically after Phase 1 ("Scan Marketplace Images") finishes.
+  # `workflow_run` only fires for workflow files on the default branch.
+  workflow_run:
+    workflows: ["Scan Marketplace Images"]
+    types: [completed]
+  workflow_dispatch:
+    # Manual trigger (re-run after a human fixes a gate gap — repo onboarded,
+    # CSV row added, etc.).
+
+# Never let two publish runs mutate the shared DB / tux-dev state concurrently.
+concurrency:
+  group: phase2-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # When triggered by Phase 1, only proceed if Phase 1 actually succeeded.
+    # (A manual workflow_dispatch has no upstream conclusion, so allow it too.)
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success' }}
+    runs-on:
+      - self-hosted
+      - azure-vm-marketplace
+
+    steps:
+      # ----------------------------------------------------------------
+      # 1. Checkout source
+      # ----------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # 2. Restore the shared SQLite DB (most recent, via the prefix key).
+      #    Phase 2 updates each row's `validated` / `reason`, then re-saves
+      #    the cache under the same prefix so the next Phase 1 run sees it.
+      # ----------------------------------------------------------------
+      - name: Restore database cache
+        uses: actions/cache/restore@v4
+        with:
+          path: marketplace.db
+          key: marketplace-db-v2-${{ github.run_id }}
+          restore-keys: |
+            marketplace-db-v2-
+
+      # ----------------------------------------------------------------
+      # 2b. Restore the auto-incrementing AzNFS build-version counter so each
+      #     pipeline trigger gets the next version (0.3.0, 0.3.1, ...).
+      # ----------------------------------------------------------------
+      - name: Restore AzNFS version counter
+        uses: actions/cache/restore@v4
+        with:
+          path: output/aznfs_version.txt
+          key: aznfs-version-${{ github.run_id }}
+          restore-keys: |
+            aznfs-version-
+
+      # ----------------------------------------------------------------
+      # 3. Python setup and dependency install
+      # ----------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ----------------------------------------------------------------
+      # 4. Fetch Phase 1's hand-off (needs_validation.json).
+      #    On workflow_run we pull the artifact the triggering Phase 1 run
+      #    uploaded; on manual dispatch we fall back to whatever the most
+      #    recent successful Phase 1 run produced.
+      # ----------------------------------------------------------------
+      - name: Download Phase 1 output (from triggering run)
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: marketplace-scan-${{ github.event.workflow_run.run_number }}
+          path: output
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+
+      - name: Download latest Phase 1 output (manual dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: scan-marketplace.yml
+          workflow_conclusion: success
+          name_is_regexp: true
+          name: marketplace-scan-.*
+          path: output
+          if_no_artifact_found: fail
+
+      # ----------------------------------------------------------------
+      # 5. Run the Phase 2 publishing orchestrator (src/phase2/run.py).
+      #
+      #    Exit codes: 0 = run completed (per-image outcomes reported via the
+      #    Phase 1 e-mail notifier + summary); 1 = run error; 2 = bad input.
+      # ----------------------------------------------------------------
+      - name: Run Phase 2 orchestrator
+        env:
+          # Phase 1 helpers (notifier.py, db_manager.py) live in scripts/ as
+          # top-level modules; put it on PYTHONPATH so run.py's _load_phase1()
+          # can `import notifier, db_manager` at runtime.
+          PYTHONPATH: scripts
+          # --- Azure creds for the in-process ACS e-mail notifier (shared with Phase 1) ---
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}
+          ACS_ENDPOINT: ${{ vars.ACS_ENDPOINT }}
+          ACS_SENDER: ${{ vars.ACS_SENDER }}
+          NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
+          # --- tux-dev repo content server (Gate 1 repo index + Gate 3 listing) ---
+          # Corp-network only (ExpressRoute / corp VPN). For tunnel-based testing
+          # set HTTPS_PROXY/HTTP_PROXY to a socks5h:// proxy that egresses to corp.
+          TUX_DEV_REPO_BASE: ${{ vars.TUX_DEV_REPO_BASE }}
+          HTTPS_PROXY: ${{ vars.PHASE2_HTTPS_PROXY }}
+          HTTP_PROXY: ${{ vars.PHASE2_HTTPS_PROXY }}
+          # tux-dev is corp-internal: never send its traffic to a proxy's bypass list
+          NO_PROXY: ${{ vars.PHASE2_NO_PROXY }}
+          HTTP_TIMEOUT: ${{ vars.HTTP_TIMEOUT }}
+          EXPECTED_SIGNING_SERVICES: ${{ vars.EXPECTED_SIGNING_SERVICES }}
+          ACCEPTED_REPO_GROUPS: ${{ vars.ACCEPTED_REPO_GROUPS }}
+          # --- Azure DevOps (AzNFS build pipeline + onboarding YAMLs) ---
+          ADO_ORG: ${{ vars.ADO_ORG }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          AZNFS_PIPELINE_ID: ${{ vars.AZNFS_PIPELINE_ID }}
+          ADO_MI_CLIENT_ID: ${{ vars.ADO_MI_CLIENT_ID }}
+          ADO_PIPELINE_BRANCH: ${{ vars.ADO_PIPELINE_BRANCH }}
+          # --- Onboarding repo (Gate 2 repo metadata) ---
+          ONBOARD_REPO: ${{ vars.ONBOARD_REPO }}
+          ONBOARD_REPOS_PATH: ${{ vars.ONBOARD_REPOS_PATH }}
+          ONBOARD_REF: ${{ vars.ONBOARD_REF }}
+          # --- AzNFS source (packages.tux.csv build matrix, read from GitHub raw) ---
+          AZNFS_REPO: ${{ vars.AZNFS_REPO }}
+          PACKAGES_TUX_CSV_PATH: ${{ vars.PACKAGES_TUX_CSV_PATH }}
+          PINNED_BRANCH: ${{ vars.PINNED_BRANCH }}
+          GITHUB_RAW_BASE: ${{ vars.GITHUB_RAW_BASE }}
+          # --- Build-version policy ---
+          AZNFS_START_VERSION: ${{ vars.AZNFS_START_VERSION }}   # default: 0.3.0
+          AZNFS_VERSION_STATE: output/aznfs_version.txt
+          TRUST_BELOW_VERSION: ${{ vars.TRUST_BELOW_VERSION }}   # default: 0.3.10
+          # Build poll/timeout policy (optional; defaults: 600s poll, 7200s timeout)
+          BUILD_POLL_INTERVAL: ${{ vars.BUILD_POLL_INTERVAL }}
+          BUILD_TIMEOUT: ${{ vars.BUILD_TIMEOUT }}
+        run: |
+          python -m src.phase2.run --input output/needs_validation.json --output output/lisa_jobs.json
+
+      # ----------------------------------------------------------------
+      # 6. Upload the Phase 3 hand-off (LISA jobs) as an artifact.
+      # ----------------------------------------------------------------
+      - name: Upload LISA jobs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisa-jobs-${{ github.run_number }}
+          path: output/lisa_jobs.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # ----------------------------------------------------------------
+      # 7. Persist the DB (validated/reason updates) for the next run.
+      # ----------------------------------------------------------------
+      - name: Save database cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: marketplace.db
+          key: marketplace-db-v2-${{ github.run_id }}
+
+      # ----------------------------------------------------------------
+      # 8. Persist the AzNFS version counter for the next run.
+      # ----------------------------------------------------------------
+      - name: Save AzNFS version counter
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: output/aznfs_version.txt
+          key: aznfs-version-${{ github.run_id }}
