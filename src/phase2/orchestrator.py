@@ -1,0 +1,258 @@
+"""Phase 2 orchestration: validate AzNFS coverage against PMC **prod**.
+
+Prod-only design (no PMC API, no tux-dev, no ADO build). For each image handed
+over by Phase 1 the orchestrator walks three checks built straight on the public
+``packages.microsoft.com`` version-indexed layout:
+
+    Gate 1  repo exists?      GET /<distro>/<version>/prod/ returns 200
+              no  -> notify (terminate) + DB known_unsupported
+    Gate 2  package exists?   the aznfs dir lists a 0.3.x build for this arch
+              no  -> notify (publish manually) + DB pending_publish  [retried next run]
+    Gate 3  validation needed?  numeric-latest 0.3.x prod version p  vs  DB last_validated_version
+              no  (p == v_last) -> notify (trusted) + DB known_supported
+              yes (first time, or p > v_last) -> emit LISA job + DB pending_validation
+
+External effects (prod client, DB, notifier) stay injectable so the flow is easy
+to unit-test and to wire into the CLI/workflow layer (see ``run.py``).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import Protocol
+
+from . import pmc_packages
+
+logger = logging.getLogger(__name__)
+
+# Validation states written back to the DB ``validated`` column (mirror db_manager).
+KNOWN_SUPPORTED = "known_supported"
+KNOWN_UNSUPPORTED = "known_unsupported"
+PENDING_PUBLISH = "pending_publish"
+PENDING_VALIDATION = "pending_validation"
+
+
+class ProdLike(Protocol):
+    """The PMC-prod read surface the gates need (see pmc_packages.ProdPackageIndex)."""
+    def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None: ...
+    def list_packages(self, distro: str, version: str, family: str) -> list[str]: ...
+
+
+class DbLike(Protocol):
+    def set_validation_state(self, identity: tuple[str, str, str, str, str], state: str) -> None: ...
+
+
+class NotifierLike(Protocol):
+    def notify_actionable(self, distro_label: str, message: str) -> None: ...
+    def notify_pending_publish(self, distro_label: str, message: str) -> None: ...
+    def notify_trusted(self, distro_label: str, message: str) -> None: ...
+    def notify_summary(
+        self,
+        processed: int,
+        unsupported: list[str],
+        pending_publish: list[str],
+        trusted: list[str],
+        to_phase3: list[str],
+    ) -> None: ...
+
+
+@dataclass
+class Phase2Result:
+    outcome: str  # unsupported | pending_publish | trusted | to_phase3
+    reason: str = ""
+    lisa_job: dict | None = None
+
+
+@dataclass
+class GateResult:
+    passed: bool
+    reason: str = ""
+    details: str = ""
+    segment: str | None = None
+    resolved_version: str | None = None
+
+
+def _identity(entry: dict) -> tuple[str, str, str, str, str]:
+    return (
+        entry.get("publisher", ""),
+        entry.get("image") or entry.get("offer") or "",
+        entry.get("sku", ""),
+        entry.get("region", ""),
+        entry.get("architecture") or entry.get("arch") or "",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gate 1: does a prod repo exist for this distro release?
+# ---------------------------------------------------------------------------
+def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
+    """A PMC prod pocket exists for this image's distro release.
+
+    Resolves the ``<distro>`` segment + ``<version>`` candidates from the image's
+    ``distro_label`` (no codename map) and probes ``/<distro>/<version>/prod/``.
+    """
+    label = entry.get("distro_label", "")
+    family = entry.get("family") or ""
+    segment = pmc_packages.distro_segment(label, entry.get("publisher", ""))
+    if not segment:
+        return GateResult(False, "unmapped distro", details=label or entry.get("publisher", ""))
+
+    candidates = pmc_packages.version_candidates(label, entry.get("version", ""))
+    if not candidates:
+        return GateResult(False, "unparseable version", details=f"{label!r}")
+
+    resolved = prod.resolve_repo(segment, candidates, family)
+    if not resolved:
+        return GateResult(False, "prod repo missing", details=f"{segment} {candidates}")
+    return GateResult(True, segment=segment, resolved_version=resolved)
+
+
+# ---------------------------------------------------------------------------
+# LISA job (Phase 3 hand-off)
+# ---------------------------------------------------------------------------
+def _make_lisa_job(entry: dict, distro: str, version: str, family: str,
+                   package_filename: str, aznfs_version: str) -> dict:
+    """Assemble the Phase 3 LISA job for a prod-published package needing validation."""
+    download_url = pmc_packages.aznfs_dir_url(distro, version, family) + package_filename
+    return {
+        "distro_info": {
+            "distro_label": entry.get("distro_label"),
+            "publisher": entry.get("publisher"),
+            "offer": entry.get("image") or entry.get("offer"),
+            "sku": entry.get("sku"),
+            "image_version": entry.get("version"),
+            "region": entry.get("region"),
+            "arch": entry.get("architecture") or entry.get("arch"),
+        },
+        "distro_label": entry.get("distro_label"),
+        "publisher": entry.get("publisher"),
+        "offer": entry.get("image") or entry.get("offer"),
+        "sku": entry.get("sku"),
+        "image_version": entry.get("version"),
+        "region": entry.get("region"),
+        "arch": entry.get("architecture") or entry.get("arch"),
+        "repository": f"{distro}/{version}/prod",
+        "package_filename": package_filename,
+        "aznfs_version": aznfs_version,
+        "variant_name": aznfs_version,
+        "download_url": download_url,
+    }
+
+
+def write_lisa_jobs(jobs: list[dict], path: str) -> None:
+    """Persist the run's LISA jobs as the Phase 3 hand-off artifact."""
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(jobs, fh, indent=2)
+    logger.info("Wrote %d LISA job(s) -> %s", len(jobs), path)
+
+
+# ---------------------------------------------------------------------------
+# Per-image flow
+# ---------------------------------------------------------------------------
+def process_entry(entry: dict, prod: ProdLike, db: DbLike, notifier: NotifierLike) -> Phase2Result:
+    """Run the three prod checks for one image and apply the side-effects."""
+    ident = _identity(entry)
+    label = entry.get("distro_label", "")
+    family = entry.get("family") or ""
+    arch = (entry.get("architecture") or entry.get("arch") or "").lower()
+
+    # Gate 1: prod repo exists?
+    g1 = gate1_repo_exists(entry, prod)
+    if not g1.passed:
+        reason = "repo is missing"
+        notifier.notify_actionable(label, reason)
+        db.set_validation_state(ident, KNOWN_UNSUPPORTED)
+        return Phase2Result("unsupported", reason=reason)
+
+    distro, version = g1.segment, g1.resolved_version
+
+    # Gate 2: is an aznfs package for this arch published in the tracked 0.3.x series?
+    want_arch = pmc_packages.normalize_arch(arch, family)
+    files = prod.list_packages(distro, version, family)
+    arch_files = [
+        f for f in files
+        if pmc_packages.file_arch(f, family) == want_arch
+        and pmc_packages.in_series(pmc_packages.version_from_filename(f))
+    ]
+    if not arch_files:
+        reason = (
+            f"no AzNFS packages are found ({want_arch}); "
+            "please publish manually then re-run Phase 2"
+        )
+        notifier.notify_pending_publish(label, reason)
+        db.set_validation_state(ident, PENDING_PUBLISH)
+        return Phase2Result("pending_publish", reason=reason)
+
+    # Gate 3: validation needed? Numeric-latest 0.3.x prod version vs what Phase 3 last validated.
+    best = max(arch_files, key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)))
+    p = pmc_packages.version_from_filename(best)
+    v_last = (entry.get("last_validated_version") or "").strip()
+
+    needs_validation = (not v_last) or (
+        pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
+    )
+    if not needs_validation:
+        reason = f"already validated on prod (v{p})"
+        notifier.notify_trusted(label, reason)
+        db.set_validation_state(ident, KNOWN_SUPPORTED)
+        return Phase2Result("trusted", reason=reason)
+
+    lisa_job = _make_lisa_job(entry, distro, version, family, best, p)
+    db.set_validation_state(ident, PENDING_VALIDATION)
+    reason = f"validate v{p}" + (f" (was v{v_last})" if v_last else " (first validation)")
+    return Phase2Result("to_phase3", reason=reason, lisa_job=lisa_job)
+
+
+def run_phase2(
+    entries: list[dict],
+    prod: ProdLike,
+    db: DbLike,
+    notifier: NotifierLike,
+    lisa_jobs_path: str | None = None,
+) -> list[dict]:
+    """Process every image, write the Phase 3 hand-off, and send the run summary."""
+    lisa_jobs: list[dict] = []
+    unsupported: list[str] = []
+    pending_publish: list[str] = []
+    trusted: list[str] = []
+    to_phase3: list[str] = []
+
+    for e in entries:
+        label = e.get("distro_label", "?")
+        try:
+            result = process_entry(e, prod, db, notifier)
+        except Exception as exc:  # one image's failure never aborts the run
+            logger.exception("Unexpected error processing %s", label)
+            notifier.notify_actionable(label, f"orchestrator error (will retry next run): {exc}")
+            continue
+
+        if result.outcome == "unsupported":
+            unsupported.append(label)
+        elif result.outcome == "pending_publish":
+            pending_publish.append(label)
+        elif result.outcome == "trusted":
+            trusted.append(label)
+        else:  # to_phase3
+            to_phase3.append(label)
+            if result.lisa_job:
+                lisa_jobs.append(result.lisa_job)
+
+    if lisa_jobs_path:
+        write_lisa_jobs(lisa_jobs, lisa_jobs_path)
+    notifier.notify_summary(
+        processed=len(entries),
+        unsupported=unsupported,
+        pending_publish=pending_publish,
+        trusted=trusted,
+        to_phase3=to_phase3,
+    )
+    logger.info(
+        "Phase 2: %d processed | %d to-phase3 | %d trusted | %d pending-publish | %d unsupported",
+        len(entries), len(to_phase3), len(trusted), len(pending_publish), len(unsupported),
+    )
+    return lisa_jobs
