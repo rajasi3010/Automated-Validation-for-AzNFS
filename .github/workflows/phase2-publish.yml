@@ -13,9 +13,12 @@ on:
     # Manual trigger (e.g. re-run after a package is manually published to prod
     # so a pending_publish distro flows through to validation).
 
-# Never let two runs mutate the shared DB concurrently.
+# Serialize on the shared SQLite DB cache. Phase 2 AND Phase 3 both mutate
+# marketplace.db, so they must run one-at-a-time under ONE concurrency group to
+# avoid clobbering each other's writes (last-writer-wins on the cache).
+# IMPORTANT: Phase 3's workflow MUST use this same group name to be serialized.
 concurrency:
-  group: phase2-publish
+  group: marketplace-db
   cancel-in-progress: false
 
 jobs:

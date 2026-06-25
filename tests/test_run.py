@@ -168,6 +168,43 @@ def test_enrich_merges_pending_publish_rows_and_dedupes():
     assert {r["distro_label"] for r in out} == {"Ubuntu 22.04", "Debian 11"}
 
 
+def _ident(e):
+    return (e["publisher"], e["image"], e["sku"], e["region"], e["architecture"])
+
+
+def test_enrich_skips_in_flight_and_terminal_db_states():
+    # A reused Phase 1 artifact still lists images Phase 2 already handled. The DB
+    # state is authoritative, so an in-flight (pending_validation) or already-ruled
+    # (known_supported/known_unsupported) image is NOT re-dispatched -- only the
+    # fresh `unknown` survives. This is the idempotency / no-double-dispatch guard.
+    e_inflight = _entry(sku="inflight")
+    e_supported = _entry(sku="supported")
+    e_unsupported = _entry(sku="unsupported")
+    e_fresh = _entry(sku="fresh")
+    db = FakeDbMod(records={
+        _ident(e_inflight): {"validated": "pending_validation"},
+        _ident(e_supported): {"validated": "known_supported", "last_validated_version": "0.3.458"},
+        _ident(e_unsupported): {"validated": "known_unsupported"},
+        _ident(e_fresh): {"validated": "unknown"},
+    })
+
+    out = run.enrich_and_merge([e_inflight, e_supported, e_unsupported, e_fresh], db, "db")
+
+    assert [r["sku"] for r in out] == ["fresh"]
+
+
+def test_enrich_keeps_pending_publish_artifact_entry():
+    # An image whose DB state is pending_publish is NOT terminal -- it must keep
+    # flowing so it re-checks prod for the (now hopefully published) package.
+    e = _entry()
+    db = FakeDbMod(records={_ident(e): {"validated": "pending_publish"}})
+
+    out = run.enrich_and_merge([e], db, "db")
+
+    assert len(out) == 1
+    assert out[0]["sku"] == "server"
+
+
 # ---------------------------------------------------------------------------
 # End-to-end run() with injected fakes (no network, no Phase 1 modules)
 # ---------------------------------------------------------------------------

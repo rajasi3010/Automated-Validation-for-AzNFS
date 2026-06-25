@@ -99,14 +99,32 @@ def load_entries(path: str) -> list[dict]:
     return data
 
 
-def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
-    """Add each image's DB ``last_validated_version`` and merge pending_publish rows.
+# DB ``validated`` states that mean Phase 2 is already finished with an image and
+# must NOT re-process it. Skipping these is what makes a manual re-run idempotent
+# against a reused Phase 1 artifact, and what stops Phase 2 from re-dispatching a
+# job that Phase 3 is still validating (or has already ruled on) -- the same DB
+# row both phases share:
+#   pending_validation      -> a LISA job is already in flight at Phase 3
+#   known_supported/-unsupported -> Phase 3 already returned a verdict
+# Only ``unknown`` (fresh from Phase 1) and re-queued ``pending_publish`` flow on.
+_SKIP_STATES = frozenset({"pending_validation", "known_supported", "known_unsupported"})
 
-    * Enrich: Gate 3 compares the latest prod version against what Phase 3 last
-      validated; that baseline lives in the DB, so copy it onto each entry.
-    * Merge: images parked ``pending_publish`` on a previous run are re-queued
-      here even if Phase 1 did not re-emit them, so they re-flow once the package
-      is finally published. De-duplicated against the incoming entries by identity.
+
+def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
+    """Build Phase 2's work queue from the Phase 1 hand-off + the DB.
+
+    The DB ``validated`` state is authoritative:
+
+    * Skip any image already ``pending_validation`` / ``known_supported`` /
+      ``known_unsupported`` -- it is in flight at Phase 3 or already has a
+      verdict, so re-processing would double-dispatch the LISA job (and could
+      race a concurrent Phase 3 writing the same DB row). A manual re-run reuses
+      the previous Phase 1 artifact, so this skip is what keeps it idempotent.
+    * Enrich the survivors with their DB ``last_validated_version`` (Gate 3's
+      baseline).
+    * Merge images parked ``pending_publish`` on a previous run so they re-flow
+      once the package is finally published, even if Phase 1 did not re-emit
+      them. De-duplicated against the incoming entries by identity.
     """
     out: list[dict] = []
     seen: set[tuple] = set()
@@ -115,11 +133,17 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
         ident = _identity(e)
         seen.add(ident)
         v_last = e.get("last_validated_version", "")
+        state = None
         try:
             rec = db_mod.get_image_record(db_path, *ident)
-            v_last = rec.get("last_validated_version", v_last) if rec else v_last
+            if rec:
+                state = rec.get("validated")
+                v_last = rec.get("last_validated_version", v_last)
         except Exception:  # pragma: no cover - DB best-effort; entry default stands
             logger.debug("DB lookup failed for %s; using entry default", ident)
+        if state in _SKIP_STATES:
+            logger.info("Skipping %s: DB state %r (already handled / in flight at Phase 3)", ident, state)
+            continue
         out.append({**e, "last_validated_version": v_last or ""})
 
     try:
