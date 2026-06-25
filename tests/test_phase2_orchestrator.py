@@ -157,13 +157,18 @@ def test_first_validation_emits_lisa_job():
     assert r.outcome == "to_phase3"
     assert r.lisa_job is not None
     job = r.lisa_job
+    # Field names match Phase 3's LisaJob dataclass exactly (consumed directly).
     assert job["aznfs_version"] == "0.3.2"
-    assert job["variant_name"] == "0.3.2"
-    assert job["repository"] == "ubuntu/22.04/prod"
-    assert job["package_filename"] == "aznfs_0.3.2_amd64.deb"
-    assert job["download_url"].startswith("https://")
-    assert job["download_url"].endswith("/ubuntu/22.04/prod/pool/main/a/aznfs/aznfs_0.3.2_amd64.deb")
-    assert "distro_info" in job
+    assert job["image"] == "ubuntu-22_04-lts"
+    assert job["version"] == "22.04.202506"
+    assert job["arch"] == "x86_64"
+    assert job["distro_label"] == "Ubuntu 22.04"
+    assert job["aznfs_package_url"].startswith("https://")
+    assert job["aznfs_package_url"].endswith("/ubuntu/22.04/prod/pool/main/a/aznfs/aznfs_0.3.2_amd64.deb")
+    # Dropped legacy fields must NOT appear (Phase 3 would ignore them anyway).
+    assert "distro_info" not in job
+    assert "download_url" not in job
+    assert "repository" not in job
     assert db.updates[-1][1] == PENDING_VALIDATION
 
 
@@ -204,7 +209,7 @@ def test_series_filter_ignores_non_0_3_lineages():
 
     assert r.outcome == "to_phase3"
     assert r.lisa_job["aznfs_version"] == "0.3.458"
-    assert r.lisa_job["package_filename"] == "aznfs_0.3.458_amd64.deb"
+    assert r.lisa_job["aznfs_package_url"].endswith("aznfs_0.3.458_amd64.deb")
 
 
 def test_only_non_series_builds_is_pending_publish():
@@ -242,9 +247,9 @@ def test_yum_minor_fallback_and_arch_mapping_to_phase3():
     )
 
     assert r.outcome == "to_phase3"
-    assert r.lisa_job["package_filename"] == "aznfs-0.3.2-1.x86_64.rpm"
-    assert r.lisa_job["repository"] == "rhel/9/prod"
-    assert r.lisa_job["download_url"].endswith("/rhel/9/prod/Packages/a/aznfs-0.3.2-1.x86_64.rpm")
+    assert r.lisa_job["aznfs_version"] == "0.3.2"
+    assert r.lisa_job["arch"] == "x86_64"
+    assert r.lisa_job["aznfs_package_url"].endswith("/rhel/9/prod/Packages/a/aznfs-0.3.2-1.x86_64.rpm")
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +287,7 @@ def test_run_phase2_buckets_writes_jobs_and_single_summary(tmp_path):
     assert s["errors"] == []
 
     written = json.loads(out.read_text())
-    assert written[0]["package_filename"] == "aznfs_0.3.2_amd64.deb"
+    assert written[0]["aznfs_package_url"].endswith("aznfs_0.3.2_amd64.deb")
 
 
 def test_run_phase2_swallows_per_entry_errors_into_summary():

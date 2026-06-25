@@ -115,30 +115,26 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
 # ---------------------------------------------------------------------------
 def _make_lisa_job(entry: dict, distro: str, version: str, family: str,
                    package_filename: str, aznfs_version: str) -> dict:
-    """Assemble the Phase 3 LISA job for a prod-published package needing validation."""
+    """Assemble the Phase 3 LISA job for a prod-published package needing validation.
+
+    The field names match Phase 3's ``LisaJob`` dataclass EXACTLY so Phase 3's
+    ``load_jobs`` consumes this artifact directly (it keeps only known fields):
+    ``publisher / image / sku / version / region / arch`` identify the
+    marketplace image + DB row, and ``aznfs_package_url / aznfs_version`` are the
+    published package Phase 3 installs and asserts. ``distro_label`` is carried
+    through for human-readable reporting.
+    """
     download_url = pmc_packages.aznfs_dir_url(distro, version, family) + package_filename
     return {
-        "distro_info": {
-            "distro_label": entry.get("distro_label"),
-            "publisher": entry.get("publisher"),
-            "offer": entry.get("image") or entry.get("offer"),
-            "sku": entry.get("sku"),
-            "image_version": entry.get("version"),
-            "region": entry.get("region"),
-            "arch": entry.get("architecture") or entry.get("arch"),
-        },
-        "distro_label": entry.get("distro_label"),
         "publisher": entry.get("publisher"),
-        "offer": entry.get("image") or entry.get("offer"),
+        "image": entry.get("image") or entry.get("offer"),
         "sku": entry.get("sku"),
-        "image_version": entry.get("version"),
+        "version": entry.get("version"),
         "region": entry.get("region"),
         "arch": entry.get("architecture") or entry.get("arch"),
-        "repository": f"{distro}/{version}/prod",
-        "package_filename": package_filename,
+        "distro_label": entry.get("distro_label"),
+        "aznfs_package_url": download_url,
         "aznfs_version": aznfs_version,
-        "variant_name": aznfs_version,
-        "download_url": download_url,
     }
 
 

@@ -227,7 +227,7 @@ def test_run_end_to_end_to_phase3_writes_lisa_jobs(tmp_path):
 
     assert len(jobs) == 1
     written = json.loads(out.read_text())
-    assert written[0]["package_filename"] == "aznfs_0.3.2_amd64.deb"
+    assert written[0]["aznfs_package_url"].endswith("aznfs_0.3.2_amd64.deb")
     assert db_mod.calls[-1][2] == "pending_validation"
     # Exactly one mail: the summary, with this distro in the to_phase3 bucket.
     assert len(notifier_mod.summaries) == 1
