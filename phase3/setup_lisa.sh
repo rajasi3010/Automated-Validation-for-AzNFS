@@ -31,6 +31,12 @@ LISA_SRC="${LISA_SRC:-$HOME/azfiles-lisa}"
 LISA_REPO="${LISA_REPO:-https://github.com/Azure/azfiles-lisa.git}"
 LISA_REF="${LISA_REF:-main}"
 
+# LISA + its deps are public packages: pin pip to public PyPI so a stray private
+# feed (e.g. a leftover ~/.pip/pip.conf pointing at an auth-only Azure Artifacts
+# feed) can't hijack the install with a 401. Override PIP_INDEX_URL to use a
+# different index on purpose.
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple/}"
+
 # Repo root = two levels up from this script (phase3/ -> repo root).
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _REPO_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"

@@ -7,8 +7,8 @@
 #   lisa -r runbooks/aznfs_validation.yml \
 #     -v subscription_id:<sub> \
 #     -v marketplace_image:"RedHat:RHEL:9_5:latest" \
-#     -v aznfs_package_url:"https://<tuxdev>/.../aznfs-0.3.2-1.x86_64.rpm" \
-#     -v aznfs_expected_version:"0.3.2"
+#     -v aznfs_package_url:"https://packages.microsoft.com/rhel/9.0/prod/Packages/a/aznfs-0.3.458-1.x86_64.rpm" \
+#     -v aznfs_expected_version:"0.3.458"
 name: "AzNFS-Phase3-Validation"
 # How many environments (VMs) run at once. Each case uses its own fresh VM, so
 # this many cases/distros validate in parallel - wall-clock collapses to ~the
