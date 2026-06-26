@@ -29,7 +29,10 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-PROD_BASE = os.environ.get("PROD_REPO_BASE", "https://packages.microsoft.com").rstrip("/")
+# ``or`` (not the get-default) so an env var that is SET BUT EMPTY -- which is
+# how an unset GitHub Actions repo variable arrives, e.g. PROD_REPO_BASE: '' --
+# falls back to the default instead of yielding an empty base URL.
+PROD_BASE = (os.environ.get("PROD_REPO_BASE") or "https://packages.microsoft.com").rstrip("/")
 
 _MAP_PATH = Path(__file__).with_name("distro_map.yaml")
 
@@ -192,7 +195,9 @@ class ProdPackageIndex:
         session: requests.Session | None = None,
     ) -> None:
         self.base_url = (base_url or PROD_BASE).rstrip("/")
-        self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT", "30"))
+        # ``or "30"`` guards against HTTP_TIMEOUT being set-but-empty in CI
+        # (an unset repo variable arrives as ''), which int('') would reject.
+        self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         self._session = session or requests.Session()
 
     def _ok(self, url: str) -> bool:
