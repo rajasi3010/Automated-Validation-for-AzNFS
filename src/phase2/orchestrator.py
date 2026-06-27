@@ -1,4 +1,4 @@
-"""Phase 2 orchestration: validate AzNFS coverage against PMC **prod**.
+﻿"""Phase 2 orchestration: validate AzNFS coverage against PMC **prod**.
 
 Prod-only design (no PMC API, no tux-dev, no ADO build). For each image handed
 over by Phase 1 the orchestrator walks three checks built straight on the public
@@ -19,13 +19,17 @@ is easy to unit-test and to wire into the CLI/workflow layer (see ``run.py``).
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
 from . import pmc_packages
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,7 @@ class NotifierLike(Protocol):
 
 @dataclass
 class Phase2Result:
-    outcome: str  # unsupported | pending_publish | trusted | to_phase3
+    outcome: str  # known_unsupported | pending_publish | trusted | to_phase3
     reason: str = ""
     lisa_job: dict | None = None
 
@@ -83,6 +87,86 @@ def _identity(entry: dict) -> tuple[str, str, str, str, str]:
         entry.get("region", ""),
         entry.get("architecture") or entry.get("arch") or "",
     )
+
+
+_AZNFS_PACKAGES_CSV_URL = (
+    "https://raw.githubusercontent.com/Azure/AZNFS-mount/main/packages.csv"
+)
+_SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
+_SUPPORTED_CENTOS = {"7", "8"}
+_SUPPORTED_RHEL = {"7", "8", "9", "10"}
+_SUPPORTED_ROCKY = {"8", "9"}
+_SUPPORTED_SLES = {"15", "16"}
+
+
+def _major_minor(label: str) -> tuple[str, str]:
+    m = re.search(r"(10|\d+)(?:\.(\d+))?", label)
+    if not m:
+        return "", ""
+    return m.group(1), m.group(2) or ""
+
+
+def _is_aznfs_supported_distro(label: str) -> bool:
+    s = (label or "").strip().lower()
+    major, minor = _major_minor(s)
+
+    if "ubuntu" in s:
+        ver = f"{major}.{minor}" if major and minor else ""
+        return ver in _SUPPORTED_UBUNTU
+    if "centos" in s:
+        return major in _SUPPORTED_CENTOS
+    if "rhel" in s or "redhat" in s or "red hat" in s:
+        return major in _SUPPORTED_RHEL
+    if "rocky" in s:
+        return major in _SUPPORTED_ROCKY
+    if "sles" in s or "suse" in s:
+        return major in _SUPPORTED_SLES
+    return False
+
+
+def _packages_csv_mentions_distro(label: str) -> bool:
+    """Best-effort check whether AZNFS-mount/packages.csv has this distro family."""
+    tokens = []
+    s = (label or "").strip().lower()
+    major, minor = _major_minor(s)
+
+    if "ubuntu" in s and major and minor:
+        tokens.extend([f"ubuntu {major}.{minor}", f"ubuntu-{major}.{minor}"])
+    elif "rhel" in s and major:
+        tokens.extend([f"rhel {major}", f"rhel-{major}", f"redhat {major}"])
+    elif "centos" in s and major:
+        tokens.extend([f"centos {major}", f"centos-{major}"])
+    elif "rocky" in s and major:
+        tokens.extend([f"rocky {major}", f"rocky-{major}"])
+    elif "sles" in s and major:
+        tokens.extend([f"sles {major}", f"sles-{major}"])
+    elif "debian" in s and major:
+        tokens.extend([f"debian {major}", f"debian-{major}"])
+    elif "azure linux" in s:
+        tokens.extend(["azure linux", "azurelinux"])
+    elif "mariner" in s:
+        tokens.extend(["cbl-mariner", "mariner"])
+
+    if not tokens:
+        return False
+
+    try:
+        resp = requests.get(_AZNFS_PACKAGES_CSV_URL, timeout=20)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return False
+
+    text = resp.text.lower()
+    if any(tok in text for tok in tokens):
+        return True
+
+    # Fallback to CSV cell scan in case formatting changes.
+    reader = csv.reader(io.StringIO(resp.text))
+    for row in reader:
+        row_txt = " ".join(c.strip().lower() for c in row)
+        if any(tok in row_txt for tok in tokens):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +250,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     g1 = gate1_repo_exists(entry, prod)
     if not g1.passed:
         db.set_validation_state(ident, KNOWN_UNSUPPORTED)
-        return Phase2Result("unsupported", reason="repo is missing")
+        return Phase2Result("known_unsupported", reason="prod repo is missing")
 
     distro, version = g1.segment, g1.resolved_version
 
@@ -179,10 +263,23 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
         and pmc_packages.in_series(pmc_packages.version_from_filename(f))
     ]
     if not arch_files:
-        reason = (
-            f"no AzNFS packages are found ({want_arch}); "
-            "please publish manually then re-run Phase 2"
-        )
+        label = entry.get("distro_label", "")
+        if not _is_aznfs_supported_distro(label):
+            reason = f"{label}: distro is not supported by AzNFS"
+            db.set_validation_state(ident, KNOWN_UNSUPPORTED)
+            return Phase2Result("known_unsupported", reason=reason)
+
+        if _packages_csv_mentions_distro(label):
+            reason = (
+                f"{label}: no AzNFS packages found ({want_arch}) on prod; "
+                "publish packages manually and re-invoke Phase 2"
+            )
+        else:
+            reason = (
+                f"{label}: no AzNFS packages found ({want_arch}) and not present "
+                "in AZNFS-mount/packages.csv; team must update yaml/csv, push "
+                "branch, and re-invoke Phase 2 with that branch"
+            )
         db.set_validation_state(ident, PENDING_PUBLISH)
         return Phase2Result("pending_publish", reason=reason)
 
@@ -228,7 +325,7 @@ def run_phase2(
             errors.append((label, f"orchestrator error (will retry next run): {exc}"))
             continue
 
-        if result.outcome == "unsupported":
+        if result.outcome == "known_unsupported":
             unsupported.append((label, result.reason))
         elif result.outcome == "pending_publish":
             pending_publish.append((label, result.reason))
@@ -250,7 +347,7 @@ def run_phase2(
         errors=errors,
     )
     logger.info(
-        "Phase 2: %d processed | %d to-phase3 | %d trusted | %d pending-publish | %d unsupported | %d errors",
+        "Phase 2: %d processed | %d to-phase3 | %d trusted | %d pending-publish | %d known_unsupported | %d errors",
         len(entries), len(to_phase3), len(trusted), len(pending_publish), len(unsupported), len(errors),
     )
     return lisa_jobs
