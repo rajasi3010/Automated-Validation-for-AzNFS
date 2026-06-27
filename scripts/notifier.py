@@ -1,4 +1,4 @@
-"""Send notifications via Azure Communication Services Email using Managed Identity."""
+﻿"""Send notifications via Azure Communication Services Email using Managed Identity."""
 from __future__ import annotations
 
 import html
@@ -64,18 +64,18 @@ def send_phase1_summary(
 ) -> None:
     """Phase 1 notification: NEW distro releases that need AzNFS validation.
 
-    Reports at the distro-release granularity only — the cut-down list. The
+    Reports at the distro-release granularity only ΓÇö the cut-down list. The
     underlying SKU / version / region / architecture churn is deliberately not
     shown (it is tracked in the DB and the per-SKU artifact for auditing), so a
     fresh scan reports a handful of OS releases, not hundreds of SKUs.
     """
     if not new_distros:
-        logger.info("No new distro releases — skipping notification.")
+        logger.info("No new distro releases ΓÇö skipping notification.")
         return
 
     recipients = list(recipients or config.NOTIFY_RECIPIENTS)
     if not recipients:
-        logger.warning("No recipients configured — skipping notification.")
+        logger.warning("No recipients configured ΓÇö skipping notification.")
         return
 
     n = len(new_distros)
@@ -92,7 +92,7 @@ def send_phase1_summary(
         f"<h3 style='font-family:Segoe UI,sans-serif'>Distro releases to validate "
         f"<span style='color:#888;font-weight:normal'>({n})</span></h3>"
         f"<p style='font-family:Segoe UI,sans-serif;color:#555'>"
-        f"New OS releases discovered on the marketplace — the unit AzNFS validates. "
+        f"New OS releases discovered on the marketplace ΓÇö the unit AzNFS validates. "
         f"SKU / version / region / architecture are collapsed (shown as counts).</p>"
         f"{_distro_rows_html(new_distros)}"
     )
@@ -148,7 +148,7 @@ def send_monthly_reminder(
 ) -> None:
     """Monthly reminder: every tracked distro release, grouped by validation state.
 
-    Three groups — known_supported / known_unsupported / unknown (the last also
+    Three groups ΓÇö known_supported / known_unsupported / unknown (the last also
     folds in the not-yet-decided pending_* states). ``buckets`` maps each state
     key to a distro-rollup list (one entry per OS release, with its latest
     version, contributing publishers and SKU count). Sent at most once per
@@ -158,7 +158,7 @@ def send_monthly_reminder(
     """
     recipients = list(recipients or config.NOTIFY_RECIPIENTS)
     if not recipients:
-        logger.warning("No recipients configured — skipping notification.")
+        logger.warning("No recipients configured ΓÇö skipping notification.")
         return
 
     states = _ordered_states(buckets)
@@ -213,7 +213,7 @@ def send_monthly_reminder(
         f"<span style='color:#888;font-weight:normal'>({total_distros})</span></h3>"
         f"<p style='font-family:Segoe UI,sans-serif;color:#555'>"
         f"All distro releases currently tracked by AzFilesAutoPackager, grouped by "
-        f"AzNFS validation state. This is a once-a-month snapshot — daily scans with "
+        f"AzNFS validation state. This is a once-a-month snapshot ΓÇö daily scans with "
         f"nothing new stay silent.</p>"
         f"{sections}"
     )
@@ -255,7 +255,7 @@ def notify(
     """Generic e-mail helper (used by the Phase 2 / Phase 3 functions below)."""
     recipients = list(recipients or config.NOTIFY_RECIPIENTS)
     if not recipients:
-        logger.warning("No recipients configured — skipping notification.")
+        logger.warning("No recipients configured ΓÇö skipping notification.")
         return
     body = html_body or f"<pre style='font-family:Consolas,monospace'>{html.escape(plain)}</pre>"
     _send(subject, plain, body, recipients)
@@ -357,7 +357,7 @@ def send_phase2_summary(
     subject = (
         f"[AzNFS Phase 2] run summary: {len(to_phase3)} to Phase 3, "
         f"{len(trusted)} trusted, {len(pending_publish)} pending publish, "
-        f"{len(unsupported)} unsupported"
+        f"{len(unsupported)} known_unsupported"
     )
 
     def _lines(items):
@@ -370,7 +370,7 @@ def send_phase2_summary(
         + f"\n\nAlready validated on prod, trusted (Phase 3 skipped) ({len(trusted)}):\n"
         + ("\n".join(f"  - {lbl}" for lbl in trusted) or "  (none)")
         + f"\n\nPending manual publish ({len(pending_publish)}):\n{_lines(pending_publish)}"
-        + f"\n\nMarked unsupported ({len(unsupported)}):\n{_lines(unsupported)}"
+        + f"\n\nMarked known_unsupported ({len(unsupported)}):\n{_lines(unsupported)}"
         + (f"\n\nSkipped (family/label mismatch): {skipped}" if skipped else "")
         + (f"\n\nOrchestrator errors ({len(errors)}):\n{_lines(errors)}" if errors else "")
     )
@@ -380,11 +380,11 @@ def send_phase2_summary(
 def post_webhook(url: str | None, text: str, timeout: int = 15) -> bool:
     """POST a simple ``{"text": ...}`` payload to a webhook. Returns success.
 
-    Used for the pre-flight reachability ping. Never raises — a webhook problem
+    Used for the pre-flight reachability ping. Never raises ΓÇö a webhook problem
     is reported via the return value so the caller can decide.
     """
     if not url:
-        logger.warning("No webhook URL configured — skipping webhook post.")
+        logger.warning("No webhook URL configured ΓÇö skipping webhook post.")
         return False
     try:
         import requests  # local import: keeps Phase 1's import surface unchanged
