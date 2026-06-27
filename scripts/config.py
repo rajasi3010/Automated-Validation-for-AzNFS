@@ -1,4 +1,4 @@
-"""
+﻿"""
 Central configuration for the marketplace scanner.
 All tuneable values live here; secrets come from environment variables.
 """
@@ -22,6 +22,10 @@ PUBLISHERS = [
     "RedHat",
     "SUSE",
     "Debian",
+    # CentOS images (publisher commonly OpenLogic in Marketplace).
+    "OpenLogic",
+    # Rocky Linux images (publisher commonly resf in Marketplace).
+    "resf",
     # Microsoft's own distro: Azure Linux 3.x and CBL-Mariner 1.x/2.x.
     "MicrosoftCBLMariner",
 ]
