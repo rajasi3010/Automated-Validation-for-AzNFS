@@ -54,6 +54,7 @@ class LisaJob:
     lisa_passed: bool = False
     distro_label: str = ""
     failure_reason: str = ""
+    logs_url: str = ""
 
     def image_key(self) -> Dict[str, str]:
         # The 5-key identity Phase 1/Phase 2 use (NOT version; WITH architecture).
@@ -71,6 +72,20 @@ class LisaJob:
 # ---------------------------------------------------------------------------
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _github_run_url() -> str:
+    """Best-effort GitHub Actions run URL for summary links."""
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if repo and run_id:
+        return f"{server}/{repo}/actions/runs/{run_id}"
+    return ""
+
+
+def _image_urn(job: LisaJob) -> str:
+    return f"{job.publisher}:{job.image}:{job.sku}:{job.version}"
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +165,10 @@ def _notify(subject: str, body: str) -> None:
 
 def _send_summary(
     processed: int,
-    supported: List[str],
-    unsupported: List[Tuple[str, str]],
+    supported: List[Dict[str, str]],
+    unsupported: List[Dict[str, str]],
 ) -> None:
-    """The single end-of-run e-mail: every distro + the failing tier for fails."""
+    """The single end-of-run e-mail with pass/fail + URN + logs + DB state."""
     subject = (
         f"[AzNFS Phase 3] validation summary: {len(supported)} supported, "
         f"{len(unsupported)} unsupported (of {processed})"
@@ -161,13 +176,26 @@ def _send_summary(
     lines = [f"Phase 3 validated {processed} distro(s) with LISA.", ""]
     lines.append(f"Supported (known_supported) ({len(supported)}):")
     if supported:
-        lines += [f"  - {lbl}" for lbl in supported]
+        for item in supported:
+            lines += [
+                f"  - validation done for distro {item['label']}",
+                f"    image URN: {item['urn']}",
+                f"    logs URL: {item['logs_url']}",
+                "    validation_state changed to known_supported in DB",
+            ]
     else:
         lines.append("  (none)")
     lines.append("")
     lines.append(f"Unsupported (known_unsupported) ({len(unsupported)}):")
     if unsupported:
-        lines += [f"  - {lbl}: {reason}" for lbl, reason in unsupported]
+        for item in unsupported:
+            lines += [
+                f"  - validation fails for distro \"{item['label']}\"",
+                f"    image URN: {item['urn']}",
+                f"    logs URL: {item['logs_url']}",
+                "    validation_state changed to known_unsupported in DB",
+                f"    reason: {item['reason']}",
+            ]
     else:
         lines.append("  (none)")
     _notify(subject, "\n".join(lines))
@@ -187,15 +215,25 @@ def process_job(job: LisaJob) -> Tuple[str, str]:
 
 def run(jobs: List[LisaJob]) -> Dict[str, int]:
     """Record every job's verdict and send ONE summary e-mail. Returns counts."""
-    supported: List[str] = []
-    unsupported: List[Tuple[str, str]] = []
+    run_url = _github_run_url()
+    supported: List[Dict[str, str]] = []
+    unsupported: List[Dict[str, str]] = []
     for job in jobs:
         label = job.distro_label or f"{job.publisher}/{job.image}/{job.sku}"
+        logs_url = job.logs_url or run_url or "n/a"
+        urn = _image_urn(job)
         state, reason = process_job(job)
         if state == "known_supported":
-            supported.append(label)
+            supported.append({"label": label, "urn": urn, "logs_url": logs_url})
         else:
-            unsupported.append((label, reason or "validation failed"))
+            unsupported.append(
+                {
+                    "label": label,
+                    "urn": urn,
+                    "logs_url": logs_url,
+                    "reason": reason or "validation failed",
+                }
+            )
     _send_summary(len(jobs), supported, unsupported)
     logger.info(
         "Phase 3: %d supported, %d unsupported (of %d)",
