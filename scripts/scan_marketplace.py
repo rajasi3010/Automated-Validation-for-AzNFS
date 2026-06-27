@@ -1,16 +1,16 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-scan_marketplace.py — Phase 1 entry point.
+scan_marketplace.py ΓÇö Phase 1 entry point.
 
 Workflow
 --------
 1. Ensure the local SQLite database exists (create from schema if not).
 2. Authenticate to Azure and build a Compute client.
-3. For every configured region × publisher, crawl offers → SKUs → versions.
+3. For every configured region ├ù publisher, crawl offers ΓåÆ SKUs ΓåÆ versions.
 4. For each version:
      - If the (publisher, offer, sku, version, region) tuple is NOT in the DB
-       → insert it as validated='unknown' and flag it for the output JSON.
-     - If it IS in the DB → update last_checked only; no output.
+       ΓåÆ insert it as validated='unknown' and flag it for the output JSON.
+     - If it IS in the DB ΓåÆ update last_checked only; no output.
 5. Write all flagged images to output/needs_validation.json.
 6. Exit with code 0 when there are no new images, or 1 when new images were found
    so that the GitHub Actions step can branch on the result.
@@ -125,6 +125,20 @@ def derive_family_and_distro_label(
             return "yum", "openSUSE"
         return "yum", "SUSE Linux"
 
+    # CentOS (commonly under OpenLogic publisher in Marketplace).
+    if "centos" in o or "centos" in s or p == "openlogic":
+        match = re.search(r"centos[-_ ]?(\d+)", o) or re.search(r"^(\d+)", s)
+        if match:
+            return "yum", f"CentOS {match.group(1)}"
+        return "yum", "CentOS"
+
+    # Rocky Linux (commonly under RESF publisher in Marketplace).
+    if "rocky" in o or "rocky" in s or p == "resf":
+        match = re.search(r"rocky[-_ ]?(\d+)", o) or re.search(r"^(\d+)", s)
+        if match:
+            return "yum", f"Rocky {match.group(1)}"
+        return "yum", "Rocky"
+
     # Azure Linux / CBL-Mariner family (Microsoft's own distro).
     # Uses RPM + tdnf, so it shares the "yum" repo family for Phase 2.
     if (
@@ -151,7 +165,7 @@ def rollup_by_distro(images: list[dict]) -> list[dict]:
     """Collapse SKU-level rows to the unit AzNFS actually validates: a distro release.
 
     SKU, version, region, architecture and offer are *not* part of a distro's
-    identity — many marketplace offers/SKUs ship the same OS release — so they
+    identity ΓÇö many marketplace offers/SKUs ship the same OS release ΓÇö so they
     are folded away here, leaving one entry per (family, distro_label).
     Architecture and the contributing publishers/offers are kept as aggregated
     details so no information is lost.
@@ -219,6 +233,30 @@ def dedup_backlog(records: list[dict]) -> list[dict]:
             r.get("architecture", ""),
         ),
     )
+
+
+def format_phase2_input(records: list[dict]) -> list[dict]:
+    """Prepare Phase 2 input rows with distro-level numbering and stable fields.
+
+    The DB row id is SKU-level and opaque. For humans, assign a distro-level
+    number (1..N unique distro_label values in this hand-off) and surface it as
+    both ``id`` and ``no``. Keep all existing fields used by Phase 2, but rename
+    ``validated`` to ``validation_status`` in the JSON artifact.
+    """
+    labels = sorted({(r.get("distro_label") or "") for r in records})
+    no_by_label = {label: idx + 1 for idx, label in enumerate(labels)}
+
+    out: list[dict] = []
+    for r in records:
+        row = dict(r)
+        status = row.pop("validated", "")
+        label = row.get("distro_label") or ""
+        number = no_by_label.get(label, 0)
+        row["id"] = number
+        row["no"] = number
+        row["validation_status"] = status
+        out.append(row)
+    return out
 
 
 def write_step_summary(rollup: list[dict], total_tracked: int) -> None:
@@ -326,19 +364,19 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
 
 def main() -> int:
     # ------------------------------------------------------------------
-    # Step 1 — Initialise database
+    # Step 1 ΓÇö Initialise database
     # ------------------------------------------------------------------
     logger.info("Initialising database at: %s", config.DB_PATH)
     db_manager.initialize(config.DB_PATH, config.SCHEMA_PATH)
 
     # ------------------------------------------------------------------
-    # Step 2 — Azure client
+    # Step 2 ΓÇö Azure client
     # ------------------------------------------------------------------
-    logger.info("Building Azure Compute client …")
+    logger.info("Building Azure Compute client ΓÇª")
     client = azure_client.get_compute_client()
 
     # ------------------------------------------------------------------
-    # Step 3+4 — Scan and compare
+    # Step 3+4 ΓÇö Scan and compare
     # ------------------------------------------------------------------
     # Snapshot the distro releases already known, so that after the scan we can
     # report only *new* OS releases (the cut-down list), not per-SKU churn.
@@ -355,7 +393,7 @@ def main() -> int:
             offers = azure_client.list_offers(client, region, publisher)
 
             if not offers:
-                logger.info("    No offers found — skipping.")
+                logger.info("    No offers found ΓÇö skipping.")
                 continue
 
             for offer in offers:
@@ -395,20 +433,20 @@ def main() -> int:
                         updated_images.append(record)
 
     # ------------------------------------------------------------------
-    # Step 5 — Write JSON output  (only new unknowns go to Phase 2)
+    # Step 5 ΓÇö Write JSON output  (only new unknowns go to Phase 2)
     # ------------------------------------------------------------------
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
     with open(config.OUTPUT_JSON, "w", encoding="utf-8") as fh:
-        json.dump(new_images, fh, indent=2)
+        json.dump(format_phase2_input(new_images), fh, indent=2)
 
     # ------------------------------------------------------------------
-    # Step 5b — Distro-level rollup  (the unit AzNFS validates)
+    # Step 5b ΓÇö Distro-level rollup  (the unit AzNFS validates)
     # ------------------------------------------------------------------
     # Collapse every still-unknown SKU row to its unique OS release. A SKU is
     # inserted as validated='unknown' and contributes to its release until
     # Phase 2/3 marks it known_supported / known_unsupported. This distro view
-    # drives the new-release diff and the e-mail; it is kept IN MEMORY ONLY —
+    # drives the new-release diff and the e-mail; it is kept IN MEMORY ONLY ΓÇö
     # needs_validation.json (written above) is the single JSON artifact Phase 1
     # produces (and Phase 2's input).
     all_records = db_manager.get_all_records(config.DB_PATH)
@@ -429,7 +467,7 @@ def main() -> int:
     write_step_summary(distro_rollup, len(all_records))
 
     # ------------------------------------------------------------------
-    # Step 5c — One-shot backlog feed  (opt-in, temporary: EMIT_BACKLOG)
+    # Step 5c ΓÇö One-shot backlog feed  (opt-in, temporary: EMIT_BACKLOG)
     # ------------------------------------------------------------------
     # Normally needs_validation.json carries only the new/updated delta, so
     # distros already cached as validated='unknown' (e.g. after the DB cache is
@@ -457,7 +495,7 @@ def main() -> int:
         else:
             backlog = dedup_backlog(unvalidated_records)
             with open(config.OUTPUT_JSON, "w", encoding="utf-8") as fh:
-                json.dump(backlog, fh, indent=2)
+                json.dump(format_phase2_input(backlog), fh, indent=2)
             db_manager.set_meta(config.DB_PATH, "backlog_emitted_token", emit_token)
             logger.warning(
                 "EMIT_BACKLOG=%r: wrote %d backlog entry(ies) (one per "
@@ -468,17 +506,17 @@ def main() -> int:
 
 
     # ------------------------------------------------------------------
-    # Step 6 — Notify + exit code  (distro-release granularity)
+    # Step 6 ΓÇö Notify + exit code  (distro-release granularity)
     # ------------------------------------------------------------------
     # The actionable signal is a NEW distro release, not a new SKU. A new SKU of
     # an already-known release (e.g. another Ubuntu 22.04 variant) is not worth
-    # an alert — that release is already tracked/validated.
+    # an alert ΓÇö that release is already tracked/validated.
     new_distros = [
         d for d in distro_rollup if d["distro_label"] not in known_distros_before
     ]
 
     # ------------------------------------------------------------------
-    # Monthly reminder — independent of the new-release alert below.
+    # Monthly reminder ΓÇö independent of the new-release alert below.
     # ------------------------------------------------------------------
     # Sent at most once per calendar month (UTC), on the FIRST scan of the month,
     # regardless of whether that run also found new releases. So on the month's
