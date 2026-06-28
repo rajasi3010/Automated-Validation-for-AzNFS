@@ -82,6 +82,12 @@ jobs:
           # self-disables after one emit via a DB one-shot token, so a forgotten
           # variable will NOT keep re-provisioning Phase 3 VMs.
           EMIT_BACKLOG: ${{ vars.EMIT_BACKLOG || inputs.emit_backlog }}
+          # One-shot FULL re-validation: when set to a NEW token, resets every
+          # tracked distro's verdict back to 'unknown' once (keeping any
+          # pending_validation rows) so the WHOLE fleet re-runs through Phase
+          # 2/3. Pair with EMIT_BACKLOG to actually emit them. Self-disables
+          # after one run via a DB token, like EMIT_BACKLOG.
+          RESET_VALIDATION: ${{ vars.RESET_VALIDATION }}
         run: |
           cd scripts
           set +e

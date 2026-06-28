@@ -293,6 +293,52 @@ def get_all_records(db_path: str) -> list[dict]:
         conn.close()
 
 
+def reset_validation_to_unknown(
+    db_path: str, exclude_states: tuple[str, ...] = ()
+) -> int:
+    """Reset every image row's ``validated`` back to 'unknown'.
+
+    Used by the one-shot full re-validation: after a broken Phase 3 run buried
+    distros as 'known_unsupported' (or marked some 'known_supported'), this
+    clears those verdicts so the backlog feed re-runs the WHOLE fleet through
+    Phase 2/3 again. ``last_validated_version`` is also cleared so Phase 2's
+    Gate 3 treats each as a first-time validation. Rows whose current state is
+    in ``exclude_states`` are left untouched (e.g. keep 'pending_validation'
+    rows that a concurrent Phase 3 may still be working on).
+
+    Returns the number of rows reset.
+    """
+    now = _now_iso()
+    conn = _connect(db_path)
+    try:
+        if exclude_states:
+            placeholders = ",".join("?" for _ in exclude_states)
+            cur = conn.execute(
+                f"""
+                UPDATE images
+                   SET validated              = 'unknown',
+                       last_validated_version = '',
+                       last_checked           = ?
+                 WHERE validated NOT IN ({placeholders})
+                """,
+                (now, *exclude_states),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE images
+                   SET validated              = 'unknown',
+                       last_validated_version = '',
+                       last_checked           = ?
+                """,
+                (now,),
+            )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def get_rows_by_state(db_path: str, state: str) -> list[dict]:
     """Return all image rows currently in a given ``validated`` state.
 
