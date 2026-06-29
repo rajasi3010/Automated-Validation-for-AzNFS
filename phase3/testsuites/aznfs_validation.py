@@ -22,11 +22,16 @@ Validates the AzNFS package on a freshly provisioned distro VM, following the
   Tier 5 - Resilience (basic)    : after a successful mount, restart/kill the
                                   ``aznfswatchdog`` service and verify the mount
                                   still works and the service recovers.
+  Tier 6 - FIPS + EIT            : enable OS-level FIPS mode, reboot, and mount
+                                  with encryption-in-transit to guard the AzNFS
+                                  stunnel/TLS path against non-FIPS TLS curves.
 
-These tiers are grouped into three test cases (one VM each) for cost:
+These tiers are grouped into four test cases (one VM each) for cost:
   * verify_aznfs_install_lifecycle  -> Tiers 1-3 (no share needed)
   * verify_aznfs_nfs_functional     -> Tier 4   (needs an NFS share)
   * verify_aznfs_resilience         -> Tier 5   (needs an NFS share)
+  * verify_aznfs_fips_eit_mount     -> Tier 6   (needs an NFS share; skips if
+                                      FIPS cannot be enabled on the image)
 
 ASSUMPTIONS TO CONFIRM WITH THE TEAM (kept as runbook variables so they can be
 changed without touching code):
@@ -281,6 +286,61 @@ class AzNfsValidation(TestSuite):
         finally:
             self._teardown(node, nfs, environment, test_failed, log)
 
+    @TestCaseMetadata(
+        description="""
+        FIPS + EIT: turn on OS-level FIPS mode, reboot, confirm the kernel is in
+        FIPS mode, then install AzNFS and mount an Azure Files NFS share with
+        encryption-in-transit. This guards the AzNFS stunnel/TLS path against
+        FIPS-incompatible TLS curves: on a FIPS VM stunnel rejects the default
+        ECDH curves (X25519/X448 are not FIPS-approved) and fails to initialize
+        TLS, so the EIT mount fails (ICM 51000001082104). Minimal I/O check.
+
+        Skips (does not fail) on distros/images where FIPS cannot be enabled
+        programmatically here (e.g. an Ubuntu image not attached to Ubuntu Pro).
+        """,
+        requirement=simple_requirement(
+            min_core_count=2,
+            supported_platform_type=[AZURE],
+            unsupported_os=[BSD, Windows],
+        ),
+        timeout=_TIME_OUT,
+        use_new_environment=True,
+        priority=3,
+    )
+    def verify_aznfs_fips_eit_mount(
+        self, log: Logger, result: TestResult
+    ) -> None:
+        environment, node = self._get_node(result)
+        assert isinstance(environment.platform, AzurePlatform)
+        self._check_supported_distro(node)
+
+        # 1. Enable FIPS at the OS level + reboot, then prove the kernel really
+        #    booted into FIPS mode (skips cleanly if it could not be enabled).
+        self._enable_fips_and_reboot(node, log)
+        self._assert_fips_enabled(node, log)
+
+        # 2. Install AzNFS on the now-FIPS VM.
+        self._install_aznfs(node, log)
+        self._verify_footprint(node, log)
+
+        # 3. Mount with EIT - the stunnel/TLS path that breaks under FIPS. Prefer
+        #    the team-provided EIT option string; otherwise use the standard
+        #    options, which still drive the aznfs stunnel tunnel on a FIPS VM.
+        eit_opts = self._eit_mount_opts or self._mount_opts
+        log.info(f"FIPS EIT mount: options='{eit_opts}'")
+
+        nfs: Optional[Nfs] = None
+        test_failed = False
+        try:
+            nfs = self._provision_and_mount(node, environment, eit_opts, log)
+            self._simple_io(node, log)
+            self._unmount(node)
+        except Exception:
+            test_failed = True
+            raise
+        finally:
+            self._teardown(node, nfs, environment, test_failed, log)
+
     # -------------------------------------------------------------------------
     # Helpers - environment / distro
     # -------------------------------------------------------------------------
@@ -298,6 +358,67 @@ class AzNfsValidation(TestSuite):
                 UnsupportedDistroException(
                     node.os, "AzNFS supports RPM/DEB-based distros only"
                 )
+            )
+
+    def _enable_fips_and_reboot(self, node: RemoteNode, log: Logger) -> None:
+        """Turn on OS-level FIPS mode, then reboot so it takes effect.
+
+        FIPS is a boot-time kernel mode, so a reboot is always required after
+        the enable step. Programmatic enablement is wired only for the families
+        that can do it without an inline subscription token:
+          * Redhat (RHEL/Rocky/CentOS/Oracle): ``fips-mode-setup --enable``
+            (ships with crypto-policies; needs no subscription).
+          * Debian/Ubuntu: ``pro enable fips-updates`` - succeeds only when the
+            VM is already attached to Ubuntu Pro (the Ubuntu Pro marketplace
+            images auto-attach in Azure).
+        Anything else is skipped (needs a FIPS image or manual steps).
+        """
+        if isinstance(node.os, Redhat):
+            log.info("Enabling FIPS via 'fips-mode-setup --enable'")
+            res = node.execute(
+                "fips-mode-setup --enable", sudo=True, shell=True, timeout=600
+            )
+            if res.exit_code != 0:
+                raise SkippedException(
+                    "fips-mode-setup --enable failed "
+                    f"(exit {res.exit_code}): {res.stdout.strip()}"
+                )
+        elif isinstance(node.os, Debian):
+            log.info("Enabling FIPS via 'pro enable fips-updates'")
+            # --assume-yes answers the confirmation; needs a Pro-attached VM.
+            res = node.execute(
+                "pro enable fips-updates --assume-yes",
+                sudo=True,
+                shell=True,
+                timeout=_INSTALL_TIMEOUT,
+            )
+            if res.exit_code != 0:
+                raise SkippedException(
+                    "could not enable Ubuntu Pro FIPS (VM may not be "
+                    f"Pro-attached): {res.stdout.strip()}"
+                )
+        else:
+            raise SkippedException(
+                f"FIPS enablement is not implemented for {node.os.name}; "
+                "use a FIPS-enabled image or a permanently FIPS-enabled runner."
+            )
+
+        log.info("Rebooting to activate FIPS mode...")
+        node.reboot()
+
+    def _assert_fips_enabled(self, node: RemoteNode, log: Logger) -> None:
+        """Confirm the kernel actually booted into FIPS mode after the reboot."""
+        enabled = node.execute(
+            "cat /proc/sys/crypto/fips_enabled", sudo=True, shell=True
+        ).stdout.strip()
+        log.info(f"/proc/sys/crypto/fips_enabled = '{enabled}'")
+        if enabled != "1":
+            # The enable step ran but FIPS did not actually turn on (e.g. an
+            # Ubuntu image that was not Pro-attached). Skip rather than fail:
+            # it is an image/runner capability gap, not an AzNFS defect.
+            raise SkippedException(
+                "FIPS did not activate after enable + reboot "
+                f"(/proc/sys/crypto/fips_enabled='{enabled}')"
             )
 
     # -------------------------------------------------------------------------
