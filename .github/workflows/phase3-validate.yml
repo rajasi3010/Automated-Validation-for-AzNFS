@@ -128,6 +128,11 @@ jobs:
           LISA_VENV: ${{ vars.LISA_VENV }}
           PHASE3_CONCURRENCY: ${{ vars.PHASE3_CONCURRENCY }}
           PHASE3_MAX_PARALLEL_DISTROS: ${{ vars.PHASE3_MAX_PARALLEL_DISTROS }}
+          # Pin all envs into one pre-created RG so the runner MI needs only
+          # Network/Storage Account/Virtual Machine Contributor on THAT RG
+          # (no subscription-scope resourcegroups/write). Driver forces
+          # concurrency=1 when set. Empty => per-env RGs (needs sub-scope).
+          PHASE3_RESOURCE_GROUP: ${{ vars.PHASE3_RESOURCE_GROUP }}
         run: |
           set -euo pipefail
           # No jobs file (e.g. Phase 2 emitted none) -> nothing to validate.
@@ -145,7 +150,7 @@ jobs:
             --allow-no-subscriptions >/dev/null
           python -m phase3.run_phase3 output/lisa_jobs.json \
             --subscription-id "${AZURE_SUBSCRIPTION_ID}" \
-            --concurrency "${PHASE3_CONCURRENCY:-3}" \
+            --concurrency "${PHASE3_CONCURRENCY:-1}" \
             --max-parallel-distros "${PHASE3_MAX_PARALLEL_DISTROS:-1}"
 
       # ----------------------------------------------------------------
