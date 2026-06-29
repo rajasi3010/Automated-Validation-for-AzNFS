@@ -133,6 +133,8 @@ jobs:
           # (no subscription-scope resourcegroups/write). Driver forces
           # concurrency=1 when set. Empty => per-env RGs (needs sub-scope).
           PHASE3_RESOURCE_GROUP: ${{ vars.PHASE3_RESOURCE_GROUP }}
+          # Region for the pinned RG (must match the runbook's `location`).
+          PHASE3_LOCATION: ${{ vars.PHASE3_LOCATION }}
         run: |
           set -euo pipefail
           # No jobs file (e.g. Phase 2 emitted none) -> nothing to validate.
@@ -148,6 +150,15 @@ jobs:
           # authenticate as an identity that cannot deploy VMs.
           az login --identity --client-id "${AZURE_CLIENT_ID}" \
             --allow-no-subscriptions >/dev/null
+          # Ensure the pinned RG exists (idempotent; no-op if already there).
+          # LISA in this engine version tears a *specified* RG down at the end,
+          # so recreate it each run -> no manual step, RG is effectively
+          # permanent. The MI has Resource Group Contributor to do this.
+          if [ -n "${PHASE3_RESOURCE_GROUP:-}" ]; then
+            az group create --name "${PHASE3_RESOURCE_GROUP}" \
+              --location "${PHASE3_LOCATION:-centralindia}" --output none
+            echo "Ensured resource group ${PHASE3_RESOURCE_GROUP}."
+          fi
           python -m phase3.run_phase3 output/lisa_jobs.json \
             --subscription-id "${AZURE_SUBSCRIPTION_ID}" \
             --concurrency "${PHASE3_CONCURRENCY:-1}" \
