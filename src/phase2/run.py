@@ -222,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Phase 2: validate AzNFS coverage on PMC prod.")
     parser.add_argument("--input", default=PHASE2_INPUT, help="Phase 1 needs_validation.json")
     parser.add_argument("--output", default=LISA_JOBS_OUTPUT, help="lisa_jobs.json output path")
+    parser.add_argument(
+        "--distros", default="",
+        help="comma-separated distro_label allow-list (case-insensitive); "
+             "empty = all. e.g. 'Ubuntu 22.04,RHEL 9'",
+    )
     parser.add_argument("--dry-run", action="store_true",
                         help="resolve clients + input and report counts, but do not run gates")
     args = parser.parse_args(argv)
@@ -233,6 +238,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         logger.error("Cannot read Phase 1 input %s: %s", args.input, exc)
         return 2
+
+    wanted = {d.strip().casefold() for d in args.distros.split(",") if d.strip()}
+    if wanted:
+        before = len(entries)
+        entries = [e for e in entries if e.get("distro_label", "").casefold() in wanted]
+        logger.info("Distro filter %s: %d -> %d entr(ies)", sorted(wanted), before, len(entries))
 
     if args.dry_run:
         logger.info("Dry run: %d entr(ies) from %s", len(entries), args.input)
