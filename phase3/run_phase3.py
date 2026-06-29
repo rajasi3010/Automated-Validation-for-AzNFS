@@ -224,6 +224,15 @@ def main() -> int:
         "--max-parallel-distros", type=int, default=1,
         help="Distros validated at once (bound by vCPU quota).",
     )
+    parser.add_argument(
+        "--distro-filter", default=os.environ.get("PHASE3_DISTRO_FILTER", ""),
+        help=(
+            "Optional case-insensitive regex. When set, only distros whose "
+            "'<publisher> <image> <sku> <version>' identity matches are "
+            "validated (the rest are skipped). Defaults to env "
+            "PHASE3_DISTRO_FILTER. Empty => validate every distro."
+        ),
+    )
     args = parser.parse_args()
 
     # A pinned resource group shares one ARM deployment name + SSH key, so envs
@@ -242,6 +251,32 @@ def main() -> int:
     if not jobs:
         logger.warning("no jobs in %s; nothing to do.", args.jobs_json)
         return 0
+
+    # Optional subsetting: validate only the distros whose identity matches the
+    # filter regex (e.g. to re-run a single failure class). Matching nothing is
+    # treated as an error so a typo'd filter fails loudly instead of silently
+    # recording zero results.
+    if args.distro_filter:
+        pattern = re.compile(args.distro_filter, re.IGNORECASE)
+        selected = [
+            j for j in jobs
+            if pattern.search(f"{j.publisher} {j.image} {j.sku} {j.version}")
+        ]
+        logger.info(
+            "distro filter %r matched %d of %d distro(s): %s",
+            args.distro_filter, len(selected), len(jobs),
+            [j.distro_label or j.sku for j in selected],
+        )
+        if not selected:
+            logger.error(
+                "distro filter %r matched no distros; available identities:\n%s",
+                args.distro_filter,
+                "\n".join(
+                    f"  {j.publisher} {j.image} {j.sku} {j.version}" for j in jobs
+                ),
+            )
+            return 1
+        jobs = selected
 
     logger.info("validating %d distro(s) with LISA...", len(jobs))
     jobs = validate_distros(
