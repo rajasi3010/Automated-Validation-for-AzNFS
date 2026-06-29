@@ -112,7 +112,7 @@ def test_repo_exists_but_no_aznfs_marks_pending_publish(monkeypatch):
 
     assert r.outcome == "pending_publish"
     assert "publish" in r.reason.lower()
-    assert db.updates[-1][1] == PENDING_PUBLISH
+    assert db.updates[-1][1] == KNOWN_UNSUPPORTED
 
 
 def test_repo_exists_unsupported_distro_marks_known_unsupported():
@@ -161,7 +161,7 @@ def test_aznfs_present_for_other_arch_only_is_pending_publish(monkeypatch):
     r = process_entry(entry(architecture="x86_64"), prod, db)
 
     assert r.outcome == "pending_publish"
-    assert db.updates[-1][1] == PENDING_PUBLISH
+    assert db.updates[-1][1] == KNOWN_UNSUPPORTED
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +209,7 @@ def test_first_validation_emits_lisa_job():
     assert "distro_info" not in job
     assert "download_url" not in job
     assert "repository" not in job
-    assert db.updates[-1][1] == PENDING_VALIDATION
+    assert db.updates == []  # LISA path leaves validation_state unchanged
 
 
 def test_newer_prod_version_than_db_needs_validation_picks_numeric_max():
@@ -227,7 +227,7 @@ def test_newer_prod_version_than_db_needs_validation_picks_numeric_max():
 
     assert r.outcome == "to_phase3"
     assert r.lisa_job["aznfs_version"] == "0.3.18"
-    assert db.updates[-1][1] == PENDING_VALIDATION
+    assert db.updates == []  # LISA path leaves validation_state unchanged
 
 
 def test_series_filter_ignores_non_0_3_lineages():
@@ -270,7 +270,7 @@ def test_only_non_series_builds_is_pending_publish(monkeypatch):
     r = process_entry(entry(architecture="x86_64"), prod, db)
 
     assert r.outcome == "pending_publish"
-    assert db.updates[-1][1] == PENDING_PUBLISH
+    assert db.updates[-1][1] == KNOWN_UNSUPPORTED
 
 
 def test_yum_minor_fallback_and_arch_mapping_to_phase3():
