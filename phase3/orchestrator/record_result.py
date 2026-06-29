@@ -303,7 +303,7 @@ def load_jobs(path: str) -> List[LisaJob]:
 def main() -> None:
     import argparse
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = argparse.ArgumentParser(
         description="Phase 3: record LISA verdicts in the DB + send a summary."
     )
