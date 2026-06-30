@@ -8,6 +8,58 @@ from src.phase2 import run
 
 
 # ---------------------------------------------------------------------------
+# entries_from_db: build Phase 2 entries straight from the DB for a selection
+# ---------------------------------------------------------------------------
+class _DbWithRecords:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def get_all_records(self, db_path):
+        return list(self._rows)
+
+
+def test_entries_from_db_filters_and_dedups_newest_per_distro_arch():
+    rows = [
+        # Rocky 8: two SKUs, x86_64 -> keep the newest version.
+        {"publisher": "resf", "image": "rockylinux-x86_64", "sku": "8-base",
+         "region": "eastus", "architecture": "x86_64", "family": "yum",
+         "distro_label": "Rocky 8", "version": "8.9.20231119"},
+        {"publisher": "resf", "image": "rockylinux-x86_64", "sku": "8-lvm",
+         "region": "eastus", "architecture": "x86_64", "family": "yum",
+         "distro_label": "Rocky 8", "version": "8.9.20240615"},
+        # Ubuntu 22.04 arm64 (kept) + a RHEL row that must be filtered out.
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-server-jammy",
+         "sku": "22_04-lts-arm64", "region": "eastus", "architecture": "arm64",
+         "family": "apt", "distro_label": "Ubuntu 22.04", "version": "22.04.1"},
+        {"publisher": "RedHat", "image": "RHEL", "sku": "9-lvm", "region": "eastus",
+         "architecture": "x86_64", "family": "yum", "distro_label": "RHEL 9",
+         "version": "9.5"},
+    ]
+    db = _DbWithRecords(rows)
+    wanted = {"rocky 8", "ubuntu 22.04"}  # already casefolded
+
+    out = run.entries_from_db(db, "db", wanted)
+
+    # RHEL filtered out; Rocky 8 collapsed to ONE x86_64 entry (newest version).
+    labels = sorted((e["distro_label"], e["architecture"]) for e in out)
+    assert labels == [("Rocky 8", "x86_64"), ("Ubuntu 22.04", "arm64")]
+    rocky = next(e for e in out if e["distro_label"] == "Rocky 8")
+    assert rocky["version"] == "8.9.20240615"  # newest kept
+    assert rocky["sku"] == "8-lvm"
+
+
+def test_entries_from_db_empty_selection_returns_all_deduped():
+    rows = [
+        {"distro_label": "Ubuntu 22.04", "architecture": "x86_64", "version": "1"},
+        {"distro_label": "Ubuntu 22.04", "architecture": "x86_64", "version": "2"},
+        {"distro_label": "Rocky 9", "architecture": "arm64", "version": "9"},
+    ]
+    out = run.entries_from_db(_DbWithRecords(rows), "db", set())
+    keys = sorted((e["distro_label"], e["architecture"]) for e in out)
+    assert keys == [("Rocky 9", "arm64"), ("Ubuntu 22.04", "x86_64")]
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 module fakes (stand in for scripts/notifier.py + scripts/db_manager.py)
 # ---------------------------------------------------------------------------
 class FakeNotifierMod:
