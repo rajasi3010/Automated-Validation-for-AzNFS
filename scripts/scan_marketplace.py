@@ -259,24 +259,15 @@ def dedup_backlog(records: list[dict]) -> list[dict]:
 
 
 def format_phase2_input(records: list[dict]) -> list[dict]:
-    """Prepare Phase 2 input rows with distro-level numbering and stable fields.
+    """Prepare Phase 2 input rows with stable fields.
 
-    The DB row id is SKU-level and opaque. For humans, assign a distro-level
-    number (1..N unique distro_label values in this hand-off) and surface it as
-    both ``id`` and ``no``. Keep all existing fields used by Phase 2, but rename
-    ``validated`` to ``validation_status`` in the JSON artifact.
+    Keep all existing fields used by Phase 2, but rename ``validated`` to
+    ``validation_status`` in the JSON artifact.
     """
-    labels = sorted({(r.get("distro_label") or "") for r in records})
-    no_by_label = {label: idx + 1 for idx, label in enumerate(labels)}
-
     out: list[dict] = []
     for r in records:
         row = dict(r)
         status = row.pop("validated", "")
-        label = row.get("distro_label") or ""
-        number = no_by_label.get(label, 0)
-        row["id"] = number
-        row["no"] = number
         row["validation_status"] = status
         out.append(row)
     return out
