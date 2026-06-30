@@ -59,6 +59,54 @@ def test_entries_from_db_empty_selection_returns_all_deduped():
     assert keys == [("Rocky 9", "arm64"), ("Ubuntu 22.04", "x86_64")]
 
 
+def test_entries_from_db_excludes_restricted_and_plan_offers():
+    # For one (distro_label, arch) the DB carries a NEWER restricted/plan offer
+    # and an OLDER plan-free plain-server offer. Without exclusion the dedup keeps
+    # the newest (advanced-sla) -> non-deployable. With exclusion it must fall back
+    # to the plain-server image even though its version is older.
+    rows = [
+        # newest version, but restricted audience -> must be dropped
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-pro-advanced-sla",
+         "sku": "20_04", "architecture": "x86_64", "family": "apt",
+         "distro_label": "Ubuntu 20.04", "version": "20.04.202605150"},
+        # plan-bearing pro -> must be dropped
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-pro-focal",
+         "sku": "pro-20_04-lts", "architecture": "x86_64", "family": "apt",
+         "distro_label": "Ubuntu 20.04", "version": "20.04.202605120"},
+        # confidential-vm (token in the SKU) -> must be dropped
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-confidential-vm-focal",
+         "sku": "20_04-lts-cvm", "architecture": "x86_64", "family": "apt",
+         "distro_label": "Ubuntu 20.04", "version": "20.04.202605270"},
+        # older, but plan-free plain server -> the one we want
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-server-focal-daily",
+         "sku": "20_04-daily-lts", "architecture": "x86_64", "family": "apt",
+         "distro_label": "Ubuntu 20.04", "version": "20.04.202505230"},
+    ]
+    db = _DbWithRecords(rows)
+    excl = ("advanced-sla", "pro", "cvm", "confidential", "minimal", "fips")
+
+    out = run.entries_from_db(db, "db", {"ubuntu 20.04"}, exclude_substrings=excl)
+
+    assert len(out) == 1
+    assert out[0]["image"] == "0001-com-ubuntu-server-focal-daily"
+    assert out[0]["sku"] == "20_04-daily-lts"
+
+
+def test_entries_from_db_drops_distro_with_only_excluded_offers():
+    # If every offer for a (distro_label, arch) is excluded, that pair is dropped
+    # entirely rather than falling back to a non-deployable image.
+    rows = [
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-pro-advanced-sla-airdig",
+         "sku": "18_04", "architecture": "x86_64", "family": "apt",
+         "distro_label": "Ubuntu 18.04", "version": "18.04.202606050"},
+    ]
+    out = run.entries_from_db(
+        _DbWithRecords(rows), "db", {"ubuntu 18.04"},
+        exclude_substrings=("advanced-sla", "pro"),
+    )
+    assert out == []
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 module fakes (stand in for scripts/notifier.py + scripts/db_manager.py)
 # ---------------------------------------------------------------------------
