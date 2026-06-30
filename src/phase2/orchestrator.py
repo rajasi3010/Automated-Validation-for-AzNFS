@@ -399,14 +399,24 @@ def run_phase2(
 
     if lisa_jobs_path:
         write_lisa_jobs(lisa_jobs, lisa_jobs_path)
-    notifier.notify_summary(
-        processed=len(entries),
-        to_phase3=to_phase3,
-        trusted=trusted,
-        pending_publish=pending_publish,
-        unsupported=unsupported,
-        errors=errors,
-    )
+    # Like Phase 1 (which stays silent when no new distro is found), only send
+    # the summary e-mail when there is something to report. An empty Phase 1
+    # hand-off (no new distros) yields empty buckets here, so skip the mail
+    # instead of sending an empty summary.
+    if to_phase3 or trusted or pending_publish or unsupported or errors:
+        notifier.notify_summary(
+            processed=len(entries),
+            to_phase3=to_phase3,
+            trusted=trusted,
+            pending_publish=pending_publish,
+            unsupported=unsupported,
+            errors=errors,
+        )
+    else:
+        logger.info(
+            "Phase 2: nothing to report (no distros processed); "
+            "skipping summary e-mail."
+        )
     logger.info(
         "Phase 2: %d processed | %d to-phase3 | %d trusted | %d pending-publish | %d known_unsupported | %d errors",
         len(entries), len(to_phase3), len(trusted), len(pending_publish), len(unsupported), len(errors),
