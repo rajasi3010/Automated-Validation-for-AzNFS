@@ -131,13 +131,6 @@ def derive_family_and_distro_label(
             return "yum", "openSUSE"
         return "yum", "SUSE Linux"
 
-    # CentOS (commonly under OpenLogic publisher in Marketplace).
-    if "centos" in o or "centos" in s or p == "openlogic":
-        match = re.search(r"centos[-_ ]?(\d+)", o) or re.search(r"^(\d+)", s)
-        if match:
-            return "yum", f"CentOS {match.group(1)}"
-        return "yum", "CentOS"
-
     # Rocky Linux (commonly under RESF publisher in Marketplace).
     if "rocky" in o or "rocky" in s or p == "resf":
         # The major may be in the offer (rockylinux-x86_64 + sku '8-base') or
