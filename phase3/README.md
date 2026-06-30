@@ -14,7 +14,6 @@ See [`../docs/PHASE3.md`](../docs/PHASE3.md) for the full test plan.
 | `testsuites/aznfs_validation.py` | The `AzNfsValidation` LISA test suite (3 cases, 5 tiers) |
 | `testsuites/__init__.py` | Package marker |
 | `runbooks/aznfs_validation.yml` | LISA runbook (platform + `aznfs_*` inputs) |
-| `runbooks/aznfs_multidistro.yml` | Multi-distro `batch` runbook (one parallel run, many distros) |
 | `orchestrator/` | Records the verdict in the DB + sends one summary e-mail (not a LISA test) |
 | `run_phase3.py` | **Automation driver**: lisa_jobs.json → LISA → record_result |
 | `AUTOMATION.md` | How Phase 3 runs end-to-end with no human in the loop |
