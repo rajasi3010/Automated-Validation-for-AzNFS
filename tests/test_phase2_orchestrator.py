@@ -41,8 +41,8 @@ class FakeProd:
 class FakeDb:
     updates: list[tuple] = field(default_factory=list)
 
-    def set_validation_state(self, identity, state):
-        self.updates.append((identity, state))
+    def set_validation_state(self, identity, state, reason=None):
+        self.updates.append((identity, state, reason))
 
 
 @dataclass
@@ -92,6 +92,7 @@ def test_no_prod_repo_marks_unsupported():
     assert db.updates[-1] == (
         ("Canonical", "ubuntu-22_04-lts", "server", "eastus", "x86_64"),
         KNOWN_UNSUPPORTED,
+        "prod repo is missing",
     )
 
 
