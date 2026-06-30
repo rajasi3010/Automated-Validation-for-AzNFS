@@ -10,7 +10,7 @@ on a self-hosted runner.
 
 | Phase | Workflow (`name`) | What it does | Output |
 |---|---|---|---|
-| **Phase 1 — Scan** (`scripts/`) | `Scan Marketplace Images` | Discover marketplace images for the tracked publishers/regions, classify NEW / UPDATED / UNCHANGED in SQLite, e-mail new releases plus a monthly status digest. | `output/needs_validation.json` |
+| **Phase 1 — Scan** (`scripts/`) | `Scan Marketplace Images` | Discover marketplace images for the tracked publishers/regions, classify Unknown / Known_supported / Known_unsupported in SQLite, e-mail new releases plus a monthly status digest. | `output/needs_validation.json` |
 | **Phase 2 — Prod validation** (`src/phase2/`) | `Phase 2 - Validate against PMC prod` | For each image, check the version-indexed PMC **prod** layout (`packages.microsoft.com/<distro>/<version>/prod/`): does the repo exist? is the tracked `0.3.x` AzNFS package published for this arch? is it newer than what was last validated? Apply the AzNFS support policy. Emit a LISA job for the ones that need testing. | `output/lisa_jobs.json` |
 | **Phase 3 — LISA validation** (`phase3/`) | `Phase 3 - Validate AzNFS with LISA` | Provision a VM of each distro, install the AzNFS package, run the 5-tier test suite, and record `known_supported` / `known_unsupported` in the shared DB, with one summary e-mail. | DB verdict + e-mail |
 
