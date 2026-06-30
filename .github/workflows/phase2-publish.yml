@@ -93,7 +93,11 @@ jobs:
           name_is_regexp: true
           name: marketplace-scan-.*
           path: output
-          if_no_artifact_found: fail
+          # A --from-db manual run builds entries from the cached DB and does not
+          # read needs_validation.json, so a missing Phase 1 artifact must not
+          # fail the job; warn instead. (A manual run WITHOUT a distro list still
+          # needs it -- run.py then errors clearly if it is absent.)
+          if_no_artifact_found: warn
 
       # ----------------------------------------------------------------
       # 5. Run the Phase 2 validation orchestrator (src/phase2/run.py).
@@ -132,7 +136,16 @@ jobs:
           # they stay 'unknown' in the DB and validate later once enabled.
           DISTROS="${{ inputs.distros }}"
           if [ -z "$DISTROS" ]; then DISTROS="${{ vars.PHASE2_DISTROS }}"; fi
-          python -m src.phase2.run --input output/needs_validation.json --output output/lisa_jobs.json --distros "$DISTROS"
+          # A MANUAL run with an explicit distro list builds its entries straight
+          # from the cached DB (--from-db), so it can validate exactly those
+          # distros without depending on Phase 1's delta-only needs_validation.json
+          # (which usually won't contain them). The automatic cascade keeps using
+          # the Phase 1 artifact (+ the PHASE2_DISTROS filter).
+          FROM_DB=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.distros }}" ]; then
+            FROM_DB="--from-db"
+          fi
+          python -m src.phase2.run --input output/needs_validation.json --output output/lisa_jobs.json --distros "$DISTROS" $FROM_DB
 
       # ----------------------------------------------------------------
       # 6. Upload the Phase 3 hand-off (LISA jobs) as an artifact.
