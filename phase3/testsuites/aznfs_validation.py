@@ -549,9 +549,19 @@ class AzNfsValidation(TestSuite):
                 "[Tier 1: artifact] package metadata should mention aznfs"
             ).contains(AZNFS_PACKAGE_NAME)
         else:
-            # Signature/digest. NOTE: `rpm -K` returns 0 when digests are OK
-            # even if the GPG key isn't imported; the team can tighten this to
-            # require "signatures OK" once the Microsoft key is trusted.
+            # Import the Microsoft signing key first so rpm can VERIFY the
+            # package signature. Without it, `rpm -K` reports
+            # "NOT OK (MISSING KEYS: ... be1229cf)" and exits 1 - a false
+            # failure, since the artifact is fine and just the key is absent on
+            # a freshly provisioned VM. With the key imported, `rpm -K` actually
+            # checks the RSA/GPG signature.
+            node.execute(
+                "rpm --import https://packages.microsoft.com/keys/microsoft.asc",
+                sudo=True,
+                shell=True,
+                timeout=120,
+            )
+            # Signature/digest verification (now that the MS key is trusted).
             sig = node.execute(f"rpm -K {package_path}", sudo=True, shell=True)
             log.info(f"rpm -K output: {sig.stdout.strip()}")
             sig.assert_exit_code(0, "[Tier 1: artifact] rpm signature/digest check failed")
