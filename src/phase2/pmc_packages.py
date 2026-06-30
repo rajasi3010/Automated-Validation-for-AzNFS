@@ -61,7 +61,7 @@ def _load_map(path: str = str(_MAP_PATH)) -> dict:
 def distro_segment(distro_label: str, publisher: str = "") -> str | None:
     """PMC ``<distro>`` path segment for an image (e.g. "Ubuntu 22.04" -> "ubuntu").
 
-    A ``distro_label`` keyword match wins first (so openSUSE/CentOS/Alma resolve
+    A ``distro_label`` keyword match wins first (so openSUSE/Alma/Rocky resolve
     regardless of the marketplace publisher); otherwise fall back to the
     publisher map. Returns ``None`` when nothing matches (unmapped distro).
     """
