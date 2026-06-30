@@ -89,3 +89,32 @@ def test_summary_swallows_errors(notifier):
     mod, email_client_cls = notifier
     email_client_cls.return_value.begin_send.side_effect = RuntimeError("boom")
     mod.send_phase1_summary([_distro()])  # must not raise
+
+
+def test_monthly_reminder_reason_column_for_unsupported_only(notifier):
+    mod, email_client_cls = notifier
+    instance = email_client_cls.return_value
+    instance.begin_send.return_value.result.return_value = mock.Mock(id="msg-r")
+
+    buckets = {
+        "known_supported": [
+            {"distro_label": "Ubuntu 22.04", "version": "22.04.1",
+             "publishers": ["Canonical"], "sku_count": 3, "reason": ""},
+        ],
+        "known_unsupported": [
+            {"distro_label": "Ubuntu 18.04", "version": "18.04.9",
+             "publishers": ["Canonical"], "sku_count": 2,
+             "reason": "prod repo is missing"},
+        ],
+        "unknown": [],
+    }
+    mod.send_monthly_reminder(buckets)
+
+    msg = instance.begin_send.call_args[0][0]
+    html_body = msg["content"]["html"]
+    plain = msg["content"]["plainText"]
+    # The Reason column + text appear, and ONLY for the unsupported bucket
+    # (the supported/unknown tables omit it), so exactly one Reason header.
+    assert html_body.count(">Reason<") == 1
+    assert "prod repo is missing" in html_body
+    assert "prod repo is missing" in plain
