@@ -125,6 +125,19 @@ def test_run_sends_single_summary_with_reasons(tmp_path, monkeypatch):
     assert "suse:sles:15-sp5" in body
 
 
+def test_run_no_jobs_sends_no_email(monkeypatch):
+    # Like Phase 1 (silent with no new distros), Phase 3 must NOT e-mail when
+    # there is nothing to validate.
+    sent: list = []
+    monkeypatch.setattr(
+        record_result, "_notify",
+        lambda s, b, html_body=None: sent.append((s, b)),
+    )
+    summary = record_result.run([])
+    assert summary == {"known_supported": 0, "known_unsupported": 0}
+    assert sent == []  # no e-mail
+
+
 # ---------------------------------------------------------------------------
 # _parse_junit: extracts the failing tier from the failure message
 # ---------------------------------------------------------------------------
