@@ -143,7 +143,7 @@ Key properties:
 | | |
 |---|---|
 | Region | `eastus` |
-| Publishers | `Canonical`, `RedHat`, `SUSE`, `Debian`, `MicrosoftCBLMariner`, `OpenLogic` (CentOS), `resf` (Rocky) |
+| Publishers | `Canonical`, `RedHat`, `SUSE`, `Debian`, `MicrosoftCBLMariner`, `resf` (Rocky) |
 | Frequency | Daily, 03:30 UTC (plus manual dispatch) |
 | Recipients | `scripts/config.py` default list, overridable via the `NOTIFY_RECIPIENTS` repo variable |
 
@@ -190,7 +190,7 @@ highlights:
 | `publisher`, `image`, `sku`, `region` | Identity tuple from the Marketplace API. `image` maps to the SDK's `offer`. |
 | `architecture` | Normalised to `x86_64` or `arm64` (SDK values `x64` / `Arm64`). |
 | `family` | `apt` or `yum` — used by Phase 2 gates. |
-| `distro_label` | Human-readable name, e.g. `Ubuntu 24.04`, `RHEL 9`, `CentOS 8`, `Rocky 9`. |
+| `distro_label` | Human-readable name, e.g. `Ubuntu 24.04`, `RHEL 9`, `Rocky 9`. |
 | `version` | Latest version observed. Bumped in place on a new release. |
 | `validated` | Lifecycle: `unknown` -> `pending_validation` -> `known_supported` / `known_unsupported` (Phase 2 may park a row at `pending_publish` while it waits for a manual prod publish). **Preserved across version bumps** so manual validation state is not lost. Surfaced in the Phase 1 JSON as `validation_status`. |
 | `last_validated`, `last_validated_version` | Stamped by Phase 2/3 when a verdict is recorded. |
@@ -295,7 +295,7 @@ For each image Phase 2 walks the version-indexed PMC prod layout:
    the row is parked `pending_validation`.
 
 The **AzNFS-supported distros** are: Ubuntu 18.04 / 20.04 / 22.04 / 24.04 / 26.04;
-CentOS 7 / 8; RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
+RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
 
 ## Phase 3 — LISA validation
 
