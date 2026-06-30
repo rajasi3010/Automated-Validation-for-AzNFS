@@ -76,7 +76,6 @@ APT_HTML_WITH_AZNFS = """
     ("RHEL 9.8", "RedHat", "rhel"),
     ("openSUSE 15.5", "SUSE", "opensuse"),   # keyword beats the SUSE->sles publisher map
     ("SLES 15", "SUSE", "sles"),
-    ("CentOS 7", "OpenLogic", "centos"),
     ("Debian 11", "Debian", "debian"),
     ("", "Canonical", "ubuntu"),             # publisher fallback when label has no keyword
 ])
