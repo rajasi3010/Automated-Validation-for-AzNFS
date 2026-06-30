@@ -20,7 +20,7 @@ publishers:
   microsoft: {distro: azurelinux, index: yum}
 
 # distro_label keyword -> [segment, index]. Checked FIRST (first substring match
-# wins), so openSUSE / CentOS / Alma / Rocky / Mariner resolve correctly even
+# wins), so openSUSE / Alma / Rocky / Mariner resolve correctly even
 # when the marketplace publisher is generic. Order matters.
 labels:
   - [ubuntu,        ubuntu,      apt]
@@ -28,7 +28,6 @@ labels:
   - ["red hat",     rhel,        yum]
   - [redhat,        rhel,        yum]
   - [rhel,          rhel,        yum]
-  - [centos,        centos,      yum]
   - [opensuse,      opensuse,    yum]
   - [sles,          sles,        yum]
   - [almalinux,     alma,        yum]
