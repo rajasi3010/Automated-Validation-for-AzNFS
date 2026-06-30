@@ -47,7 +47,12 @@ class ProdLike(Protocol):
 
 
 class DbLike(Protocol):
-    def set_validation_state(self, identity: tuple[str, str, str, str, str], state: str) -> None: ...
+    def set_validation_state(
+        self,
+        identity: tuple[str, str, str, str, str],
+        state: str,
+        reason: str | None = None,
+    ) -> None: ...
 
 
 class NotifierLike(Protocol):
@@ -253,8 +258,9 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     # Gate 1: prod repo exists?
     g1 = gate1_repo_exists(entry, prod)
     if not g1.passed:
-        db.set_validation_state(ident, KNOWN_UNSUPPORTED)
-        return Phase2Result("known_unsupported", reason="prod repo is missing")
+        reason = "prod repo is missing"
+        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+        return Phase2Result("known_unsupported", reason=reason)
 
     distro, version = g1.segment, g1.resolved_version
 
@@ -270,30 +276,26 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
         label = entry.get("distro_label", "")
         # (a) the distro is outside the AzNFS support matrix -> terminal.
         if not _is_aznfs_supported_distro(label):
-            db.set_validation_state(ident, KNOWN_UNSUPPORTED)
-            return Phase2Result(
-                "known_unsupported",
-                reason="repo is found but packages are not found because distro is not supported by AzNFS",
-            )
+            reason = "repo is found but packages are not found because distro is not supported by AzNFS"
+            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+            return Phase2Result("known_unsupported", reason=reason)
         # (b) supported distro already listed in AZNFS-mount/packages.csv -> the
         # csv does not need a change; a human just needs to publish the package.
         # validation_state stays known_unsupported (only 3 states are used:
         # known_supported / known_unsupported / unknown); the email still flags
         # it as pending_publish so a human knows to publish + re-invoke.
         if _packages_csv_mentions_distro(label):
-            db.set_validation_state(ident, KNOWN_UNSUPPORTED)
-            return Phase2Result(
-                "pending_publish",
-                reason="no AzNFS packages found on prod and packages.csv does not "
-                "require modification; publish packages manually and re-invoke Phase 2",
+            reason = (
+                "no AzNFS packages found on prod and packages.csv does not "
+                "require modification; publish packages manually and re-invoke Phase 2"
             )
+            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+            return Phase2Result("pending_publish", reason=reason)
         # (c) supported distro MISSING from packages.csv -> needs a csv/code
         # change first; mark known_unsupported until that branch is built.
-        db.set_validation_state(ident, KNOWN_UNSUPPORTED)
-        return Phase2Result(
-            "known_unsupported",
-            reason="team must update packages.csv + push branch + re-invoke Phase 2 with the new branch",
-        )
+        reason = "team must update packages.csv + push branch + re-invoke Phase 2 with the new branch"
+        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+        return Phase2Result("known_unsupported", reason=reason)
 
     # Gate 3: validation needed? Numeric-latest 0.3.x prod version vs what Phase 3 last validated.
     best = max(arch_files, key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)))
@@ -304,7 +306,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
         pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
     )
     if not needs_validation:
-        db.set_validation_state(ident, KNOWN_SUPPORTED)
+        db.set_validation_state(ident, KNOWN_SUPPORTED, reason="")
         return Phase2Result("trusted", reason=f"already validated on prod (v{p})")
 
     lisa_job = _make_lisa_job(entry, distro, version, family, best, p)
