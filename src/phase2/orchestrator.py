@@ -102,7 +102,6 @@ _AZNFS_PACKAGES_CSV_URL = (
     "https://raw.githubusercontent.com/Azure/AZNFS-mount/main/packages.csv"
 )
 _SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
-_SUPPORTED_CENTOS = {"7", "8"}
 _SUPPORTED_RHEL = {"7", "8", "9", "10"}
 _SUPPORTED_ROCKY = {"8", "9"}
 _SUPPORTED_SLES = {"15", "16"}
@@ -122,8 +121,6 @@ def _is_aznfs_supported_distro(label: str) -> bool:
     if "ubuntu" in s:
         ver = f"{major}.{minor}" if major and minor else ""
         return ver in _SUPPORTED_UBUNTU
-    if "centos" in s:
-        return major in _SUPPORTED_CENTOS
     if "rhel" in s or "redhat" in s or "red hat" in s:
         return major in _SUPPORTED_RHEL
     if "rocky" in s:
@@ -143,8 +140,6 @@ def _packages_csv_mentions_distro(label: str) -> bool:
         tokens.extend([f"ubuntu {major}.{minor}", f"ubuntu-{major}.{minor}"])
     elif "rhel" in s and major:
         tokens.extend([f"rhel {major}", f"rhel-{major}", f"redhat {major}"])
-    elif "centos" in s and major:
-        tokens.extend([f"centos {major}", f"centos-{major}"])
     elif "rocky" in s and major:
         tokens.extend([f"rocky {major}", f"rocky-{major}"])
     elif "sles" in s and major:
@@ -323,8 +318,8 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
 def _dedup_jobs_by_url(jobs: list[dict]) -> list[dict]:
     """One LISA job per distinct ``aznfs_package_url``, keeping the newest image.
 
-    Many marketplace SKUs of the same OS release (e.g. CentOS 7.3 .. 7.9, or
-    RHEL 9.0 .. 9.8) all resolve to the SAME prod package URL (centos/7, rhel/9,
+    Many marketplace SKUs of the same OS release (e.g. RHEL 9.0 .. 9.8, or
+    Rocky 8.x) all resolve to the SAME prod package URL (rhel/9, rocky/8,
     ...). Phase 3 only needs to validate that package once per architecture, so
     collapse them to the entry with the latest marketplace ``version`` -- a
     deterministic pick that also validates the freshest image. The result is a
