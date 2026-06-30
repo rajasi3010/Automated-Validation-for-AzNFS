@@ -22,13 +22,18 @@ PUBLISHERS = [
     "RedHat",
     "SUSE",
     "Debian",
-    # CentOS images (publisher commonly OpenLogic in Marketplace).
-    "OpenLogic",
     # Rocky Linux images (publisher commonly resf in Marketplace).
     "resf",
     # Microsoft's own distro: Azure Linux 3.x and CBL-Mariner 1.x/2.x.
     "MicrosoftCBLMariner",
 ]
+# NOTE: "OpenLogic" (the CentOS publisher) is intentionally NOT scanned. CentOS
+# 7/8 are EOL: the yum mirrors baked into those marketplace images
+# (mirrorlist.centos.org, olcentgbl.trafficmanager.net) are decommissioned, so
+# AzNFS dependencies cannot be installed. CentOS is removed from the pipeline
+# (see EXCLUDED_DISTRO_PREFIXES below, which also drops any CentOS rows still in
+# the cached DB).
+
 
 # Offers to skip during the scan. Some Canonical Ubuntu offers are PRIVATE /
 # restricted-audience plans (e.g. the "Pro - Advanced SLA" offers
@@ -45,6 +50,20 @@ EXCLUDED_OFFER_SUBSTRINGS: list[str] = [
     for s in os.environ.get("EXCLUDED_OFFER_SUBSTRINGS", "advanced-sla").split(",")
     if s.strip()
 ]
+
+# Distro families to drop from the pipeline entirely, matched case-insensitively
+# as a prefix of the derived ``distro_label`` (e.g. "centos" drops "CentOS 7" and
+# "CentOS 8"). Applied to BOTH the new/updated delta hand-off and the
+# EMIT_BACKLOG feed, so excluded distros never reach Phase 2/3 even if rows for
+# them already exist in the cached DB (or get reset to 'unknown'). CentOS is
+# excluded because it is EOL (its in-image yum mirrors are gone). Override with
+# EXCLUDED_DISTRO_PREFIXES (comma-separated) if needed.
+EXCLUDED_DISTRO_PREFIXES: list[str] = [
+    s.strip().lower()
+    for s in os.environ.get("EXCLUDED_DISTRO_PREFIXES", "centos").split(",")
+    if s.strip()
+]
+
 
 
 # ---------------------------------------------------------------------------
