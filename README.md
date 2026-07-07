@@ -1,4 +1,4 @@
-# Marketplace Distro Scanner
+# Automated Validation for AzNFS on Linux Distribution
 
 The **AzNFS marketplace validation pipeline**. It discovers new Azure Marketplace
 Linux images, checks whether the AzNFS package is published for them on PMC
