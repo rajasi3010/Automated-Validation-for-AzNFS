@@ -38,7 +38,7 @@ import notifier
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%SZ",
     stream=sys.stdout,
@@ -458,14 +458,26 @@ def main() -> int:
                         architecture, family, distro_label,
                     )
                     if status == db_manager.UNCHANGED:
+                        logger.debug(
+                            "    unchanged: %s / %s / %s %s (%s)",
+                            publisher, offer, sku, latest, distro_label,
+                        )
                         continue
 
                     record = db_manager.get_image_record(
                         config.DB_PATH, publisher, offer, sku, region, architecture,
                     )
                     if status == db_manager.NEW:
+                        logger.info(
+                            "    NEW: %s / %s / %s %s -> %s [%s] (validated=unknown)",
+                            publisher, offer, sku, latest, distro_label, architecture,
+                        )
                         new_images.append(record)
                     else:  # UPDATED
+                        logger.info(
+                            "    updated: %s / %s / %s -> %s (%s) [%s]",
+                            publisher, offer, sku, latest, distro_label, architecture,
+                        )
                         updated_images.append(record)
 
     # ------------------------------------------------------------------
