@@ -203,6 +203,7 @@ class ProdPackageIndex:
     def _ok(self, url: str) -> bool:
         try:
             resp = self._session.get(url, timeout=self.timeout)
+            logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
             return 200 <= resp.status_code < 300
         except requests.RequestException as exc:
             logger.warning("GET %s failed: %s", url, exc)
@@ -217,7 +218,10 @@ class ProdPackageIndex:
         """
         for version in candidates:
             if self._ok(repo_base_url(distro, version, self.base_url)):
+                logger.debug("resolve_repo(%s): matched version %s of candidates %s",
+                             distro, version, candidates)
                 return version
+        logger.debug("resolve_repo(%s): no prod pocket for any of %s", distro, candidates)
         return None
 
     def list_packages(self, distro: str, version: str, family: str) -> list[str]:
@@ -229,6 +233,7 @@ class ProdPackageIndex:
             logger.warning("GET %s failed: %s", url, exc)
             return []
         if resp.status_code == 404:
+            logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
             return []
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
@@ -237,6 +242,8 @@ class ProdPackageIndex:
             name = href.split("/")[-1].split("?")[0]
             if name.lower().startswith("aznfs") and name.lower().endswith(ext):
                 names.append(name)
+        logger.debug("Gate 2 listing: GET %s -> HTTP %s, %d aznfs%s file(s)",
+                     url, resp.status_code, len(names), ext)
         return names
 
     def ping(self) -> bool:
