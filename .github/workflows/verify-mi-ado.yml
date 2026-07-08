@@ -1,0 +1,112 @@
+name: Verify MI ADO access (one-off)
+
+# One-off diagnostic: does the runner's managed identity (MIscan) have
+# permission to CREATE work items in the target ADO project/area?
+#
+# It is non-destructive: it only READS work item types and runs a create with
+# `validateOnly=true`, which validates permissions/rules WITHOUT saving any
+# work item. No bug is ever created.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ado_org:
+        description: "ADO organization"
+        type: string
+        default: "msazure"
+      ado_project:
+        description: "ADO project"
+        type: string
+        default: "One"
+      area_path:
+        description: 'Area path (use double backslashes, e.g. One\\XStore\\XSMB)'
+        type: string
+        default: 'One\XStore\XSMB'
+
+jobs:
+  verify:
+    runs-on:
+      - self-hosted
+      - azure-vm-marketplace
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install --quiet azure-identity requests
+
+      - name: Probe ADO with the MI token
+        env:
+          AZURE_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}
+          ADO_ORG: ${{ inputs.ado_org }}
+          ADO_PROJECT: ${{ inputs.ado_project }}
+          AREA_PATH: ${{ inputs.area_path }}
+        run: |
+          python - <<'PY'
+          import os, json, sys
+          import requests
+          from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
+
+          org   = os.environ["ADO_ORG"]
+          proj  = os.environ["ADO_PROJECT"]
+          area  = os.environ["AREA_PATH"]
+          mi_id = os.environ.get("AZURE_MANAGED_IDENTITY_CLIENT_ID") or None
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          def out(line=""):
+              print(line)
+              if summary:
+                  with open(summary, "a", encoding="utf-8") as fh:
+                      fh.write(line + "\n")
+
+          # Azure DevOps AAD resource (well-known app id)
+          ADO_RES = "499b84ac-1321-427f-aa17-267ca6975798"
+          cred = ManagedIdentityCredential(client_id=mi_id) if mi_id else DefaultAzureCredential()
+          token = cred.get_token(ADO_RES + "/.default").token
+          hdr = {"Authorization": "Bearer " + token}
+
+          out("## MI -> ADO access probe")
+          out("")
+          out(f"- org=`{org}`  project=`{proj}`  area=`{area}`")
+          out(f"- mi_client_id=`{mi_id}`  (token acquired OK)")
+          out("")
+
+          # 1) READ: list work item types  -> confirms token + org/project membership
+          u1 = f"https://dev.azure.com/{org}/{proj}/_apis/wit/workitemtypes?api-version=7.1"
+          r1 = requests.get(u1, headers=hdr, timeout=30)
+          read_ok = (r1.status_code == 200)
+          out(f"- **GET workitemtypes** -> HTTP **{r1.status_code}** " +
+              ("(read OK - MI is a project member)" if read_ok else "(read FAILED - MI not authorized to read)"))
+
+          # 2) CREATE permission: POST a Bug with validateOnly=true (NOT saved)
+          u2 = f"https://dev.azure.com/{org}/{proj}/_apis/wit/workitems/$Bug?validateOnly=true&api-version=7.1"
+          patch = [
+              {"op": "add", "path": "/fields/System.Title", "value": "[verify] MI ADO access test (validateOnly - not saved)"},
+              {"op": "add", "path": "/fields/System.AreaPath", "value": area},
+          ]
+          r2 = requests.post(u2, headers={**hdr, "Content-Type": "application/json-patch+json"},
+                             data=json.dumps(patch), timeout=30)
+          create_ok = r2.status_code in (200, 201)
+          out(f"- **POST create Bug (validateOnly)** -> HTTP **{r2.status_code}** " +
+              ("(CREATE permission OK)" if create_ok else "(CREATE denied / failed)"))
+          if not create_ok:
+              out("")
+              out("Response body (truncated):")
+              out("```")
+              out((r2.text or "")[:800])
+              out("```")
+
+          out("")
+          if read_ok and create_ok:
+              out("### RESULT: the MI CAN create work items here - safe to wire up bug automation.")
+          else:
+              out("### RESULT: the MI CANNOT create work items yet.")
+              out("Fix: add `MIscan` (or its `SP.container` group) to **[One]\\Contributors**, "
+                  "or grant **'Edit work items in this node' = Allow** on the `XStore\\XSMB` area.")
+          PY
