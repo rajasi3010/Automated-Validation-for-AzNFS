@@ -122,9 +122,6 @@ A LISA suite is three pieces:
 The verdict recording (`phase3/orchestrator/record_result.py`) and the one
 summary e-mail are suite-agnostic and need no change.
 
----
-
-## More cases
 
 ### 5. Change which distro versions are "supported"
 `src/phase2/orchestrator.py` -> `_SUPPORTED_UBUNTU/_RHEL/_ROCKY/_SLES` and
