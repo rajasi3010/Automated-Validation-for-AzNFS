@@ -289,7 +289,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="resolve clients + input and report counts, but do not run gates")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 
     wanted = {d.strip().casefold() for d in args.distros.split(",") if d.strip()}
 
