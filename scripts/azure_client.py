@@ -32,8 +32,13 @@ def get_compute_client() -> ComputeManagementClient:
 
 def list_offers(
     client: ComputeManagementClient, location: str, publisher: str
-) -> list[str]:
-    """Return all offer names for a publisher in a region."""
+) -> Optional[list[str]]:
+    """Return all offer names for a publisher in a region.
+
+    Returns ``None`` (not ``[]``) when the SDK call fails, so callers can tell a
+    real error (e.g. an auth/token problem) apart from a publisher that simply
+    has no offers.
+    """
     try:
         return [
             o.name
@@ -43,7 +48,7 @@ def list_offers(
         logger.warning(
             "list_offers failed — location=%s publisher=%s: %s", location, publisher, exc
         )
-        return []
+        return None
 
 
 def list_skus(

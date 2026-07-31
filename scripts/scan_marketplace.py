@@ -418,9 +418,23 @@ def main() -> int:
             logger.info("  Publisher: %s", publisher)
             offers = azure_client.list_offers(client, region, publisher)
 
-            if not offers:
-                logger.info("    No offers found ΓÇö skipping.")
+            # None => the SDK call failed (see the warning it logged); [] => the
+            # publisher genuinely has no offers. Keep them distinct so an auth /
+            # token error is never mistaken for "nothing to scan".
+            if offers is None:
+                logger.error(
+                    "    Listing offers FAILED for region=%s publisher=%s "
+                    "(see warning above) — skipping this publisher.",
+                    region, publisher,
+                )
                 continue
+            if not offers:
+                logger.info("    No offers found — skipping.")
+                continue
+
+            # Per-publisher tallies so each publisher's contribution (and the
+            # unchanged denominator) is visible at INFO, not just the raw stream.
+            p_offers = p_skus = p_new = p_updated = p_unchanged = 0
 
             for offer in offers:
                 # Skip PRIVATE / restricted-audience offers the subscription
@@ -433,6 +447,7 @@ def main() -> int:
                     logger.info("    Skipping restricted offer: %s", offer)
                     continue
 
+                p_offers += 1
                 skus = azure_client.list_skus(client, region, publisher, offer)
 
                 for sku in skus:
@@ -442,6 +457,7 @@ def main() -> int:
                     if not versions:
                         continue
 
+                    p_skus += 1
                     # Dedup: one row per (publisher, image, sku, region, arch).
                     # Marketplace versions sort lexicographically (date-style).
                     latest = max(versions)
@@ -458,6 +474,7 @@ def main() -> int:
                         architecture, family, distro_label,
                     )
                     if status == db_manager.UNCHANGED:
+                        p_unchanged += 1
                         logger.debug(
                             "    unchanged: %s / %s / %s %s (%s)",
                             publisher, offer, sku, latest, distro_label,
@@ -468,25 +485,38 @@ def main() -> int:
                         config.DB_PATH, publisher, offer, sku, region, architecture,
                     )
                     if status == db_manager.NEW:
+                        p_new += 1
                         logger.info(
                             "    NEW: %s / %s / %s %s -> %s [%s] (validated=unknown)",
                             publisher, offer, sku, latest, distro_label, architecture,
                         )
                         new_images.append(record)
                     else:  # UPDATED
+                        p_updated += 1
                         logger.info(
                             "    updated: %s / %s / %s -> %s (%s) [%s]",
                             publisher, offer, sku, latest, distro_label, architecture,
                         )
                         updated_images.append(record)
 
+            logger.info(
+                "  Publisher %s summary: %d offer(s), %d SKU row(s) -> "
+                "%d new, %d updated, %d unchanged.",
+                publisher, p_offers, p_skus, p_new, p_updated, p_unchanged,
+            )
+
     # ------------------------------------------------------------------
     # Step 5 ΓÇö Write JSON output  (only new unknowns go to Phase 2)
     # ------------------------------------------------------------------
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
+    phase2_input = format_phase2_input(_exclude_distros(new_images))
     with open(config.OUTPUT_JSON, "w", encoding="utf-8") as fh:
-        json.dump(format_phase2_input(_exclude_distros(new_images)), fh, indent=2)
+        json.dump(phase2_input, fh, indent=2)
+    logger.info(
+        "Wrote %d entry(ies) to %s (the Phase 2 hand-off).",
+        len(phase2_input), config.OUTPUT_JSON,
+    )
 
     # ------------------------------------------------------------------
     # Step 5b ΓÇö Distro-level rollup  (the unit AzNFS validates)
