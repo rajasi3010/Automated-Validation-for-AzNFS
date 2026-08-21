@@ -106,6 +106,7 @@ def _identity(entry: dict) -> tuple[str, str, str, str, str]:
 _AZNFS_PACKAGES_CSV_URL = (
     "https://raw.githubusercontent.com/Azure/AZNFS-mount/main/packages.csv"
 )
+_SUPPORTED_DEBIAN = {"13"}
 _SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
 _SUPPORTED_RHEL = {"7", "8", "9", "10"}
 _SUPPORTED_ROCKY = {"8", "9"}
@@ -123,6 +124,8 @@ def _is_aznfs_supported_distro(label: str) -> bool:
     s = (label or "").strip().lower()
     major, minor = _major_minor(s)
 
+    if "debian" in s:
+        return major in _SUPPORTED_DEBIAN
     if "ubuntu" in s:
         ver = f"{major}.{minor}" if major and minor else ""
         return ver in _SUPPORTED_UBUNTU

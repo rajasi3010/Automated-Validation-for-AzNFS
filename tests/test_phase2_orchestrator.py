@@ -130,6 +130,26 @@ def test_repo_exists_unsupported_distro_marks_known_unsupported():
     assert db.updates[-1][1] == KNOWN_UNSUPPORTED
 
 
+def test_debian_13_is_supported_so_no_package_marks_pending_publish(monkeypatch):
+    # Debian 13 IS in the AzNFS support set, so a missing package routes through
+    # the supported path (pending_publish), NOT the "distro not supported" path
+    # that Debian 11 hits above.
+    monkeypatch.setattr(
+        "src.phase2.orchestrator._packages_csv_mentions_distro", lambda label: True
+    )
+    prod = FakeProd(repos={"debian": {"13"}}, packages={})
+    db = FakeDb()
+
+    r = process_entry(
+        entry(publisher="Debian", image="debian-13", sku="13-gen2",
+              distro_label="Debian 13", family="apt"),
+        prod, db,
+    )
+
+    assert r.outcome == "pending_publish"
+    assert db.updates[-1][1] == KNOWN_UNSUPPORTED
+
+
 def test_supported_distro_missing_from_csv_marks_known_unsupported(monkeypatch):
     # Supported distro, repo exists, no package, and NOT present in packages.csv
     # -> known_unsupported: the csv needs a change + branch before Phase 2 can

@@ -301,8 +301,7 @@ they appear only as labels in the summary e-mail.
    LISA job is emitted and the DB row is left `unknown` (the e-mail lists it as
    handed to Phase 3), so Phase 3 records the final verdict.
 
-The **AzNFS-supported distros** are: Ubuntu 18.04 / 20.04 / 22.04 / 24.04 / 26.04;
-RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
+The **AzNFS-supported distros** are: Debian 13; Ubuntu 18.04 / 20.04 / 22.04 / 24.04 / 26.04; RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
 
 ## Phase 3 — LISA validation
 
