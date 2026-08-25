@@ -160,6 +160,23 @@ def entries_from_db(
 _SKIP_STATES = frozenset({"pending_validation", "known_unsupported"})
 
 
+def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(distro_label prefixes, offer/sku substrings) to exclude from the
+    known_supported re-feed, matching Phase 1's marketplace policy so a stale row
+    for a non-deployable distro/offer is not re-validated. Best-effort: empty if
+    ``config`` is not importable (e.g. a bare unit-test path)."""
+    try:
+        import config  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - exercised in the real repo
+        try:
+            from scripts import config  # type: ignore
+        except ModuleNotFoundError:
+            return (), ()
+    prefixes = tuple(s.casefold() for s in getattr(config, "EXCLUDED_DISTRO_PREFIXES", ()))
+    subs = tuple(s.casefold() for s in getattr(config, "EXCLUDED_OFFER_SUBSTRINGS", ()))
+    return prefixes, subs
+
+
 def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
     """Build Phase 2's work queue from the Phase 1 hand-off + the DB.
 
@@ -226,9 +243,29 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
     # AzNFS version against last_validated_version: a NEWER package -> re-validate;
     # an unchanged one -> trusted (no VM). Tagged _db_state so process_entry never
     # DOWNGRADES a known_supported distro if the re-check hits a transient prod
-    # hiccup. Deduped against entries already queued above.
+    # hiccup. Collapsed to ONE representative per (distro_label, architecture) --
+    # newest marketplace version -- matching Phase 3's per-URL dedup so a release
+    # is re-validated once, not once per SKU; and filtered by the same exclusion
+    # policy Phase 1 uses so a stale row for a non-deployable distro/offer
+    # (e.g. CentOS, advanced-sla) is not re-fed. Deduped against entries above.
     try:
+        distro_prefixes, offer_subs = _load_exclusions()
+
+        def _excluded(row: dict) -> bool:
+            label = (row.get("distro_label") or "").casefold()
+            hay = f"{row.get('image', '')} {row.get('sku', '')}".casefold()
+            return (any(label.startswith(p) for p in distro_prefixes)
+                    or any(s in hay for s in offer_subs))
+
+        reps: dict[tuple, dict] = {}
         for row in db_mod.get_rows_by_state(db_path, "known_supported"):
+            if _excluded(row):
+                continue
+            key = (row.get("distro_label", ""), row.get("architecture", ""))
+            cur = reps.get(key)
+            if cur is None or (row.get("version", "") > cur.get("version", "")):
+                reps[key] = row
+        for row in reps.values():
             ident = (
                 row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
                 row.get("region", ""), row.get("architecture", ""),

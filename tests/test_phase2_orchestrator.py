@@ -362,6 +362,43 @@ def test_gate3_image_drift_disabled_by_env(monkeypatch):
     assert r.outcome == "trusted"
 
 
+def test_protect_supported_via_validated_field_no_downgrade():
+    # --from-db rows carry `validated` (no _db_state); a transient Gate 1 failure
+    # must still NOT downgrade a known_supported row.
+    prod = FakeProd(repos={})  # repo momentarily missing
+    db = FakeDb()
+    r = process_entry(entry(validated="known_supported"), prod, db)
+    assert r.outcome == "trusted"
+    assert db.updates == []
+
+
+def test_protect_supported_via_validation_status_field_no_downgrade():
+    # Phase 1 artifact rows carry `validation_status`; same no-downgrade guarantee.
+    prod = FakeProd(repos={})
+    db = FakeDb()
+    r = process_entry(entry(validation_status="known_supported"), prod, db)
+    assert r.outcome == "trusted"
+    assert db.updates == []
+
+
+def test_reset_row_with_stale_marker_is_revalidated_not_trusted():
+    # After RESET_VALIDATION a row is 'unknown' but a stale last_regressed_version
+    # could still match the current package. It must NOT take the known_bad trusted
+    # path (that requires a supported state) -- it must re-validate.
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+    r = process_entry(
+        entry(validated="unknown", last_validated_version="",
+              last_regressed_version="0.3.458"),
+        prod, db,
+    )
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.458"
+
+
 # ---------------------------------------------------------------------------
 # Gate 3 -> to_phase3 (validation needed)
 # ---------------------------------------------------------------------------

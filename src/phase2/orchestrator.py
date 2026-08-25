@@ -296,10 +296,14 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     # A re-check of an already-validated distro must never DOWNGRADE it: a
     # transient prod hiccup (repo momentarily unlistable, package index blip)
     # would otherwise flip a good distro to known_unsupported -- and, being
-    # terminal, it would then be skipped forever. So when the DB state is
+    # terminal, it would then be skipped forever. So when the row is
     # known_supported, Gate 1/2 failures keep it as-is; only Gate 3 finding a
-    # NEWER package re-validates it.
-    protect_supported = entry.get("_db_state") == KNOWN_SUPPORTED
+    # NEWER package re-validates it. The supported state arrives under different
+    # keys per input path: ``_db_state`` (enrich re-feed), ``validated``
+    # (--from-db rows), ``validation_status`` (Phase 1 artifact) -- honour all.
+    protect_supported = KNOWN_SUPPORTED in (
+        entry.get("_db_state"), entry.get("validated"), entry.get("validation_status")
+    )
 
     # Gate 1: prod repo exists?
     g1 = gate1_repo_exists(entry, prod)
@@ -374,18 +378,27 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     is_newer = (not v_last) or (
         pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
     )
-    # A version already known to regress on this distro is NOT re-tested (it would
-    # just fail + re-alert every run); a strictly newer package supersedes the
-    # regression marker and IS validated -> auto-recovery when a fix ships.
-    known_bad = bool(v_regressed) and (
+    # A version already known to regress on THIS supported distro is NOT re-tested
+    # (it would just fail + re-alert every run); a strictly newer package supersedes
+    # the marker and IS validated -> auto-recovery. Gate this on the supported state
+    # so a RESET row that still carries a stale marker is NOT trusted into
+    # known_supported without a LISA run.
+    known_bad = protect_supported and bool(v_regressed) and (
         pmc_packages.version_tuple(p) == pmc_packages.version_tuple(v_regressed)
     )
     # Even when the package is unchanged, re-validate a supported distro whose
     # marketplace IMAGE has drifted (rate-limited) so OS rebuilds get re-checked.
     image_drift = _image_needs_revalidation(entry)
     if known_bad or (not is_newer and not image_drift):
-        why = (f"known regression v{p}, awaiting a newer fix" if known_bad
-               else f"prod v{p} == last-validated v{v_last}, image unchanged")
+        cur_img = (entry.get("version") or "").strip()
+        v_img_last = (entry.get("last_validated_image_version") or "").strip()
+        if known_bad:
+            why = f"known regression v{p}, awaiting a newer fix"
+        elif v_img_last and cur_img and cur_img != v_img_last:
+            why = (f"prod v{p} == last-validated v{v_last}; image changed "
+                   f"({v_img_last} -> {cur_img}) but re-validation not due yet")
+        else:
+            why = f"prod v{p} == last-validated v{v_last}, image unchanged"
         logger.info("[%s] Gate 3: %s -> known_supported (trusted, no LISA run)", label or "?", why)
         db.set_validation_state(ident, KNOWN_SUPPORTED, reason="")
         return Phase2Result("trusted", reason=f"no re-validation needed (v{p})")

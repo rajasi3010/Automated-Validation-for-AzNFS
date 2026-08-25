@@ -124,6 +124,11 @@ jobs:
           # --- PMC prod content server (public, anonymous). Override only for testing. ---
           PROD_REPO_BASE: ${{ vars.PROD_REPO_BASE }}
           HTTP_TIMEOUT: ${{ vars.HTTP_TIMEOUT }}
+          # Image-drift re-validation interval (days); 0 disables. Gate 3 re-tests
+          # a supported distro when its marketplace image changed AND this many
+          # days passed since the last validation. Repo variables are not exported
+          # automatically, so it must be mapped here to be honoured.
+          PHASE3_IMAGE_REVALIDATE_DAYS: ${{ vars.PHASE3_IMAGE_REVALIDATE_DAYS }}
           # --- Paths ---
           DB_PATH: marketplace.db
         run: |

@@ -306,10 +306,13 @@ def reset_validation_to_unknown(
     Used by the one-shot full re-validation: after a broken Phase 3 run buried
     distros as 'known_unsupported' (or marked some 'known_supported'), this
     clears those verdicts so the backlog feed re-runs the WHOLE fleet through
-    Phase 2/3 again. ``last_validated_version`` is also cleared so Phase 2's
-    Gate 3 treats each as a first-time validation. Rows whose current state is
-    in ``exclude_states`` are left untouched (e.g. keep 'pending_validation'
-    rows that a concurrent Phase 3 may still be working on).
+    Phase 2/3 again. ``last_validated_version``, ``last_validated_image_version``
+    and ``last_regressed_version`` are ALL cleared so Phase 2's Gate 3 treats each
+    as a first-time validation -- no stale regression marker survives a reset (a
+    surviving marker would let Gate 3's ``known_bad`` path trust a row without a
+    LISA run). Rows whose current state is in ``exclude_states`` are left untouched
+    (e.g. keep 'pending_validation' rows that a concurrent Phase 3 may still be
+    working on).
 
     Returns the number of rows reset.
     """
@@ -321,9 +324,11 @@ def reset_validation_to_unknown(
             cur = conn.execute(
                 f"""
                 UPDATE images
-                   SET validated              = 'unknown',
-                       last_validated_version = '',
-                       last_checked           = ?
+                   SET validated                    = 'unknown',
+                       last_validated_version       = '',
+                       last_validated_image_version = '',
+                       last_regressed_version       = '',
+                       last_checked                 = ?
                  WHERE validated NOT IN ({placeholders})
                 """,
                 (now, *exclude_states),
@@ -332,9 +337,11 @@ def reset_validation_to_unknown(
             cur = conn.execute(
                 """
                 UPDATE images
-                   SET validated              = 'unknown',
-                       last_validated_version = '',
-                       last_checked           = ?
+                   SET validated                    = 'unknown',
+                       last_validated_version       = '',
+                       last_validated_image_version = '',
+                       last_regressed_version       = '',
+                       last_checked                 = ?
                 """,
                 (now,),
             )

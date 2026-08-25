@@ -284,6 +284,45 @@ def test_enrich_carries_image_version_and_timestamp_from_db():
     assert out[0]["last_validated"] == "2026-08-01T00:00:00Z"
 
 
+def test_refeed_dedups_supported_to_one_rep_per_distro_arch():
+    # Two SKUs of the same release+arch -> only the newest-version rep is re-fed
+    # (matches Phase 3's per-URL dedup; avoids re-validating the same package per SKU).
+    rows = [
+        {"publisher": "RedHat", "image": "rhel", "sku": "9_0", "version": "9.0.1",
+         "region": "eastus", "architecture": "x86_64", "family": "yum",
+         "distro_label": "RHEL 9", "last_validated_version": "0.3.400"},
+        {"publisher": "RedHat", "image": "rhel", "sku": "9-lvm", "version": "9.8.9",
+         "region": "eastus", "architecture": "x86_64", "family": "yum",
+         "distro_label": "RHEL 9", "last_validated_version": "0.3.400"},
+    ]
+    db = FakeDbMod(supported=rows)
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert len(out) == 1
+    assert out[0]["sku"] == "9-lvm"            # newest marketplace version wins
+    assert out[0]["_db_state"] == "known_supported"
+
+
+def test_refeed_excludes_policy_distros_and_offers():
+    # An excluded distro (CentOS) / offer (advanced-sla) must not be re-fed,
+    # matching Phase 1's marketplace exclusions.
+    rows = [
+        {"publisher": "OpenLogic", "image": "centos", "sku": "7", "version": "7.9",
+         "region": "eastus", "architecture": "x86_64", "family": "yum",
+         "distro_label": "CentOS 7", "last_validated_version": "0.3.400"},
+        {"publisher": "Canonical", "image": "0001-com-ubuntu-pro-advanced-sla",
+         "sku": "22_04", "version": "22.04.1", "region": "eastus",
+         "architecture": "x86_64", "family": "apt", "distro_label": "Ubuntu 22.04",
+         "last_validated_version": "0.3.400"},
+    ]
+    db = FakeDbMod(supported=rows)
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert out == []                          # both dropped by the exclusion policy
+
+
 def test_enrich_merges_pending_publish_rows_and_dedupes():
     e = _entry()
     dup_row = {**e, "last_validated_version": ""}        # same identity -> not duplicated
