@@ -269,7 +269,8 @@ known-unsupported).
 line with the image URN, the run logs URL, and the DB state transition, e.g.:
 
 - pass: `validation done for distro RHEL 9.5` → `validation_state changed to known_supported in DB`
-- fail: `validation fails for distro "SLES 16"` → failing tier + `validation_state changed to known_unsupported in DB`
+- fail (not-yet-supported): `validation fails for distro "SLES 16"` → failing tier + `validation_state changed to known_unsupported in DB`
+- regression (was `known_supported`): the distro **stays** `known_supported`; the summary reports the failing package/image as a regression instead of demoting it.
 
 Notification failures are caught and logged — they never crash a run.
 

@@ -323,6 +323,17 @@ def test_refeed_excludes_policy_distros_and_offers():
     assert out == []                          # both dropped by the exclusion policy
 
 
+def test_load_exclusions_reads_env_not_config(monkeypatch):
+    # Must not depend on `import config` (which reads AZURE_SUBSCRIPTION_ID at
+    # import and would raise in a bare manual run, silently disabling the re-feed).
+    monkeypatch.delenv("EXCLUDED_DISTRO_PREFIXES", raising=False)
+    monkeypatch.delenv("EXCLUDED_OFFER_SUBSTRINGS", raising=False)
+    assert run._load_exclusions() == (("centos",), ("advanced-sla",))
+    monkeypatch.setenv("EXCLUDED_DISTRO_PREFIXES", "centos, Fedora")
+    monkeypatch.setenv("EXCLUDED_OFFER_SUBSTRINGS", "pro,cvm")
+    assert run._load_exclusions() == (("centos", "fedora"), ("pro", "cvm"))
+
+
 def test_enrich_merges_pending_publish_rows_and_dedupes():
     e = _entry()
     dup_row = {**e, "last_validated_version": ""}        # same identity -> not duplicated

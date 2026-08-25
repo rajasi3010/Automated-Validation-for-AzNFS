@@ -161,20 +161,23 @@ _SKIP_STATES = frozenset({"pending_validation", "known_unsupported"})
 
 
 def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(distro_label prefixes, offer/sku substrings) to exclude from the
-    known_supported re-feed, matching Phase 1's marketplace policy so a stale row
-    for a non-deployable distro/offer is not re-validated. Best-effort: empty if
-    ``config`` is not importable (e.g. a bare unit-test path)."""
-    try:
-        import config  # type: ignore
-    except ModuleNotFoundError:  # pragma: no cover - exercised in the real repo
-        try:
-            from scripts import config  # type: ignore
-        except ModuleNotFoundError:
-            return (), ()
-    prefixes = tuple(s.casefold() for s in getattr(config, "EXCLUDED_DISTRO_PREFIXES", ()))
-    subs = tuple(s.casefold() for s in getattr(config, "EXCLUDED_OFFER_SUBSTRINGS", ()))
-    return prefixes, subs
+    """(distro_label prefixes, offer/sku substrings) excluded from the
+    known_supported re-feed -- the same env-driven policy as Phase 1
+    (``EXCLUDED_DISTRO_PREFIXES`` / ``EXCLUDED_OFFER_SUBSTRINGS``, same defaults).
+
+    Read straight from the environment rather than ``import config``: config.py
+    reads a required ``AZURE_SUBSCRIPTION_ID`` at import time, so importing it in a
+    bare/manual Phase 2 run without that Azure-only variable would raise and
+    (via the caller's guard) silently disable the whole re-feed.
+    """
+    def _split(var: str, default: str) -> tuple[str, ...]:
+        return tuple(
+            s.strip().casefold()
+            for s in os.environ.get(var, default).split(",")
+            if s.strip()
+        )
+    return (_split("EXCLUDED_DISTRO_PREFIXES", "centos"),
+            _split("EXCLUDED_OFFER_SUBSTRINGS", "advanced-sla"))
 
 
 def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
