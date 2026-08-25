@@ -167,21 +167,22 @@ def _record_validation(
         conn.close()
 
 
-def _current_validation(image_key: Dict[str, str]) -> Tuple[str, str]:
-    """Return (validated, last_validated_version) for the row, ('', '') if none."""
+def _current_validation(image_key: Dict[str, str]) -> Tuple[str, str, str]:
+    """Return (validated, last_validated_version, last_validated_image_version)
+    for the row, ("", "", "") if none."""
     conn = sqlite3.connect(config.DB_PATH)
     try:
         _ensure_phase3_columns(conn)
         row = conn.execute(
             """
-            SELECT validated, last_validated_version FROM images
+            SELECT validated, last_validated_version, last_validated_image_version FROM images
              WHERE publisher = ? AND image = ? AND sku = ?
                AND region = ? AND architecture = ?
             """,
             (image_key["publisher"], image_key["image"], image_key["sku"],
              image_key["region"], image_key["architecture"]),
         ).fetchone()
-        return (row[0] or "", row[1] or "") if row else ("", "")
+        return (row[0] or "", row[1] or "", row[2] or "") if row else ("", "", "")
     finally:
         conn.close()
 
@@ -267,7 +268,7 @@ def _send_summary(
         f"{_plain(supported, ['label', 'arch'])}\n\n"
         f"b) Validation fails (kept in known_unsupported) ({len(unsupported)}):\n"
         f"{_plain(unsupported, ['label', 'arch', 'urn', 'logs_url', 'reason'])}\n\n"
-        f"c) Package regressions (newer AzNFS failed; kept known_supported) ({len(regressions)}):\n"
+        f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)}):\n"
         f"{_plain(regressions, ['label', 'arch', 'urn', 'logs_url', 'reason'])}"
     )
 
@@ -293,7 +294,7 @@ def _send_summary(
             unsupported,
         )
         + _table_html(
-            f"c) Package regressions (newer AzNFS failed; kept known_supported) ({len(regressions)})",
+            f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)})",
             [
                 ("label", "Distro"),
                 ("arch", "Arch"),
@@ -329,16 +330,31 @@ def process_job(job: LisaJob) -> Tuple[str, str]:
                            last_regressed_version="",
                            last_validated_image_version=job.version)
         return "known_supported", ""
-    prior_state, prior_version = _current_validation(job.image_key())
+    prior_state, prior_version, prior_image = _current_validation(job.image_key())
     if prior_state == "known_supported":
-        reason = (
-            f"AzNFS {job.aznfs_version} regressed (last good v{prior_version or '?'}); "
-            f"kept known_supported: {job.failure_reason or 'validation failed'}"
-        )
-        logger.warning("[%s] LISA FAILED on newer package -> REGRESSION, keeping known_supported: %s",
-                       job.distro_label, job.failure_reason or "no reason")
-        # Keep last_validated_version at the last-good version; mark the failing
-        # one as regressed so Phase 2 will not re-test it (a newer package will).
+        # Distinguish an IMAGE regression (the SAME AzNFS package that previously
+        # passed now fails on a newer marketplace image) from a PACKAGE regression
+        # (a newer AzNFS package fails). Gate 3 only re-emits a supported distro
+        # for a newer package OR an image drift, so an unchanged package version
+        # means the OS image was the trigger. The DB also encodes this:
+        # last_regressed_version == last_validated_version => image regression.
+        if prior_version and job.aznfs_version == prior_version:
+            reason = (
+                f"image regression: AzNFS {job.aznfs_version} (unchanged) regressed on "
+                f"new image {job.version} (last good image {prior_image or '?'}); "
+                f"kept known_supported: {job.failure_reason or 'validation failed'}"
+            )
+        else:
+            reason = (
+                f"package regression: AzNFS {job.aznfs_version} regressed "
+                f"(last good v{prior_version or '?'}); "
+                f"kept known_supported: {job.failure_reason or 'validation failed'}"
+            )
+        logger.warning("[%s] LISA FAILED -> %s, keeping known_supported: %s",
+                       job.distro_label, reason.split(':', 1)[0].upper(),
+                       job.failure_reason or "no reason")
+        # Keep last_validated_version/-image at the last-good values; mark the
+        # failing package as regressed so Phase 2 will not re-test it.
         _record_validation(job.image_key(), "known_supported", reason="",
                            last_regressed_version=job.aznfs_version)
         return "regression", reason

@@ -197,6 +197,37 @@ def test_process_job_pass_records_validated_image_version(tmp_path, monkeypatch)
     assert img == "9.5.20260101"
 
 
+def test_process_job_image_regression_same_package_new_image(tmp_path, monkeypatch):
+    # The SAME AzNFS package that previously passed now fails on a NEWER image ->
+    # IMAGE regression (not package). Stays known_supported; the DB signal is
+    # last_regressed_version == last_validated_version.
+    db = _make_db(tmp_path)
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+    monkeypatch.setattr(record_result.config, "PHASE3_SCHEMA_PATH", "/nonexistent.sql")
+
+    key = dict(publisher="redhat", image="rhel", sku="9_5",
+               region="eastus", arch="x86_64", distro_label="RHEL 9.5")
+    record_result.process_job(record_result.LisaJob(**key, version="9.5.20260101",
+                                                    aznfs_version="0.3.458", lisa_passed=True))
+    state, reason = record_result.process_job(
+        record_result.LisaJob(**key, version="9.5.20260201",
+                              aznfs_version="0.3.458", lisa_passed=False,
+                              failure_reason="[Tier 4: mount] failed")
+    )
+
+    assert state == "regression"
+    assert "image regression" in reason and "9.5.20260201" in reason
+    conn = sqlite3.connect(str(db))
+    validated, good, regressed, img = conn.execute(
+        "SELECT validated, last_validated_version, last_regressed_version, "
+        "last_validated_image_version FROM images"
+    ).fetchone()
+    conn.close()
+    assert validated == "known_supported"
+    assert good == "0.3.458" and regressed == "0.3.458"   # regressed == good -> image regression
+    assert img == "9.5.20260101"                          # good image kept
+
+
 def test_process_job_pass_clears_regressed_marker(tmp_path, monkeypatch):
     # After a regression, a newer package that PASSES clears the regression marker
     # and advances the good baseline (auto-recovery).
