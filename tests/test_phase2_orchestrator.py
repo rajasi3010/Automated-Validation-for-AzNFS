@@ -184,6 +184,185 @@ def test_latest_already_validated_marks_trusted():
 
 
 # ---------------------------------------------------------------------------
+# Re-check of an already known_supported distro (tagged _db_state)
+# ---------------------------------------------------------------------------
+def test_recheck_known_supported_not_downgraded_on_missing_repo():
+    # A re-checked known_supported distro whose prod repo is momentarily
+    # unresolvable must NOT be flipped to known_unsupported -- it stays as-is.
+    prod = FakeProd(repos={})  # repo momentarily missing
+    db = FakeDb()
+
+    r = process_entry(entry(_db_state="known_supported"), prod, db)
+
+    assert r.outcome == "trusted"
+    assert db.updates == []  # no downgrade written
+
+
+def test_recheck_known_supported_not_downgraded_on_missing_package():
+    # Repo resolves but no aznfs package is listed right now -> still no
+    # downgrade for an already-supported distro.
+    prod = FakeProd(repos={"ubuntu": {"22.04"}}, packages={})
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458"), prod, db
+    )
+
+    assert r.outcome == "trusted"
+    assert db.updates == []
+
+
+def test_recheck_known_supported_newer_package_revalidates():
+    # A newer prod AzNFS version than last_validated_version re-emits a LISA job
+    # even though the distro is already known_supported.
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.2"), prod, db
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.458"
+    assert db.updates == []  # LISA path leaves state unchanged
+
+
+def test_recheck_known_supported_same_package_stays_trusted():
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458"), prod, db
+    )
+
+    assert r.outcome == "trusted"
+    assert db.updates[-1][1] == KNOWN_SUPPORTED
+
+
+def test_gate3_known_regressed_version_not_retested():
+    # p == last_regressed_version -> already known to regress -> trusted (no re-emit).
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.400",
+              last_regressed_version="0.3.458"),
+        prod, db,
+    )
+
+    assert r.outcome == "trusted"
+    assert r.lisa_job is None
+
+
+def test_gate3_newer_than_regressed_revalidates():
+    # A package strictly newer than the regressed one supersedes it -> re-validate.
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.500_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.400",
+              last_regressed_version="0.3.458"),
+        prod, db,
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.500"
+
+
+def _iso_days_ago(days: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_gate3_image_drift_after_interval_revalidates(monkeypatch):
+    # Same package, but the marketplace image changed and >15d passed -> re-validate.
+    monkeypatch.setenv("PHASE3_IMAGE_REVALIDATE_DAYS", "15")
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458",
+              version="22.04.202609", last_validated_image_version="22.04.202601",
+              last_validated=_iso_days_ago(30)),
+        prod, db,
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.458"
+
+
+def test_gate3_image_drift_within_interval_stays_trusted(monkeypatch):
+    # Image changed but only 5 days ago (< 15) -> trusted (rate-limited).
+    monkeypatch.setenv("PHASE3_IMAGE_REVALIDATE_DAYS", "15")
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458",
+              version="22.04.202609", last_validated_image_version="22.04.202601",
+              last_validated=_iso_days_ago(5)),
+        prod, db,
+    )
+
+    assert r.outcome == "trusted"
+
+
+def test_gate3_image_unchanged_stays_trusted(monkeypatch):
+    monkeypatch.setenv("PHASE3_IMAGE_REVALIDATE_DAYS", "15")
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458",
+              version="22.04.202601", last_validated_image_version="22.04.202601",
+              last_validated=_iso_days_ago(30)),
+        prod, db,
+    )
+
+    assert r.outcome == "trusted"
+
+
+def test_gate3_image_drift_disabled_by_env(monkeypatch):
+    # PHASE3_IMAGE_REVALIDATE_DAYS=0 turns image-drift re-validation off entirely.
+    monkeypatch.setenv("PHASE3_IMAGE_REVALIDATE_DAYS", "0")
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.458_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458",
+              version="22.04.202609", last_validated_image_version="22.04.202601",
+              last_validated=_iso_days_ago(30)),
+        prod, db,
+    )
+
+    assert r.outcome == "trusted"
+
+
+# ---------------------------------------------------------------------------
 # Gate 3 -> to_phase3 (validation needed)
 # ---------------------------------------------------------------------------
 def test_first_validation_emits_lisa_job():

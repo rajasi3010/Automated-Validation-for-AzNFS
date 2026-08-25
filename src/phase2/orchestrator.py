@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -242,6 +243,41 @@ def write_lisa_jobs(jobs: list[dict], path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Image-drift re-validation (rate-limited): re-check a supported distro when its
+# marketplace image has changed AND enough time has passed, so OS rebuilds get
+# re-validated without re-running on every (often daily) image bump.
+# ---------------------------------------------------------------------------
+def _image_revalidate_days() -> int:
+    """Days before a changed marketplace image triggers re-validation (env-tunable, 0 = off)."""
+    try:
+        return int((os.environ.get("PHASE3_IMAGE_REVALIDATE_DAYS", "") or "15").strip())
+    except ValueError:
+        return 15
+
+
+def _image_needs_revalidation(entry: dict) -> bool:
+    """True when the distro's marketplace image changed since its last validation
+    AND at least PHASE3_IMAGE_REVALIDATE_DAYS have elapsed since then."""
+    days = _image_revalidate_days()
+    if days <= 0:
+        return False
+    v_img_last = (entry.get("last_validated_image_version") or "").strip()
+    if not v_img_last:
+        return False  # never validated an image yet -> the first-time path handles it
+    cur_img = (entry.get("version") or "").strip()
+    if not cur_img or cur_img == v_img_last:
+        return False  # image unchanged
+    last = (entry.get("last_validated") or "").strip()
+    if not last:
+        return True  # image changed and no timestamp -> allow
+    try:
+        dt = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True  # unparseable timestamp -> allow
+    return datetime.now(timezone.utc) - dt >= timedelta(days=days)
+
+
+# ---------------------------------------------------------------------------
 # Per-image flow
 # ---------------------------------------------------------------------------
 def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
@@ -257,9 +293,21 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     label = entry.get("distro_label", "")
     logger.info("[%s] Phase 2 start (family=%s, arch=%s)", label or "?", family or "?", arch or "?")
 
+    # A re-check of an already-validated distro must never DOWNGRADE it: a
+    # transient prod hiccup (repo momentarily unlistable, package index blip)
+    # would otherwise flip a good distro to known_unsupported -- and, being
+    # terminal, it would then be skipped forever. So when the DB state is
+    # known_supported, Gate 1/2 failures keep it as-is; only Gate 3 finding a
+    # NEWER package re-validates it.
+    protect_supported = entry.get("_db_state") == KNOWN_SUPPORTED
+
     # Gate 1: prod repo exists?
     g1 = gate1_repo_exists(entry, prod)
     if not g1.passed:
+        if protect_supported:
+            logger.info("[%s] re-check: prod repo not resolvable now -> keeping known_supported (no downgrade)",
+                        label or "?")
+            return Phase2Result("trusted", reason="re-check skipped (prod repo not resolvable); kept known_supported")
         reason = "prod repo is missing"
         logger.info("[%s] Gate 1 FAIL (%s: %s) -> known_unsupported",
                     label or "?", g1.reason, g1.details)
@@ -281,6 +329,10 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
                 label or "?", len(files), len(arch_files), want_arch, pmc_packages.AZNFS_SERIES)
     if not arch_files:
         label = entry.get("distro_label", "")
+        if protect_supported:
+            logger.info("[%s] re-check: no newer %s.x package on prod (arch=%s) -> keeping known_supported",
+                        label or "?", pmc_packages.AZNFS_SERIES, want_arch)
+            return Phase2Result("trusted", reason="re-check: no newer package on prod; kept known_supported")
         # (a) the distro is outside the AzNFS support matrix -> terminal.
         if not _is_aznfs_supported_distro(label):
             reason = "repo is found but packages are not found because distro is not supported by AzNFS"
@@ -317,23 +369,39 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     best = max(arch_files, key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)))
     p = pmc_packages.version_from_filename(best)
     v_last = (entry.get("last_validated_version") or "").strip()
+    v_regressed = (entry.get("last_regressed_version") or "").strip()
 
-    needs_validation = (not v_last) or (
+    is_newer = (not v_last) or (
         pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
     )
-    if not needs_validation:
-        logger.info("[%s] Gate 3: prod v%s == last-validated v%s -> known_supported (trusted, no LISA run)",
-                    label or "?", p, v_last)
+    # A version already known to regress on this distro is NOT re-tested (it would
+    # just fail + re-alert every run); a strictly newer package supersedes the
+    # regression marker and IS validated -> auto-recovery when a fix ships.
+    known_bad = bool(v_regressed) and (
+        pmc_packages.version_tuple(p) == pmc_packages.version_tuple(v_regressed)
+    )
+    # Even when the package is unchanged, re-validate a supported distro whose
+    # marketplace IMAGE has drifted (rate-limited) so OS rebuilds get re-checked.
+    image_drift = _image_needs_revalidation(entry)
+    if known_bad or (not is_newer and not image_drift):
+        why = (f"known regression v{p}, awaiting a newer fix" if known_bad
+               else f"prod v{p} == last-validated v{v_last}, image unchanged")
+        logger.info("[%s] Gate 3: %s -> known_supported (trusted, no LISA run)", label or "?", why)
         db.set_validation_state(ident, KNOWN_SUPPORTED, reason="")
-        return Phase2Result("trusted", reason=f"already validated on prod (v{p})")
+        return Phase2Result("trusted", reason=f"no re-validation needed (v{p})")
 
     lisa_job = _make_lisa_job(entry, distro, version, family, best, p)
     # Emit the LISA job WITHOUT changing validation_state: it stays whatever it
     # was (unknown for a fresh distro). Phase 3 sets known_supported/-unsupported
     # on its verdict. Only 3 states ever persist.
-    logger.info("[%s] Gate 3: prod v%s %s -> emit LISA job (hand off to Phase 3)",
-                label or "?", p, f"> last-validated v{v_last}" if v_last else "(first validation)")
-    reason = f"validate v{p}" + (f" (was v{v_last})" if v_last else " (first validation)")
+    if not v_last:
+        detail = "first validation"
+    elif is_newer:
+        detail = f"newer than last-validated v{v_last}"
+    else:
+        detail = f"image drift (pkg v{p} unchanged, new image {entry.get('version')})"
+    logger.info("[%s] Gate 3: %s -> emit LISA job (hand off to Phase 3)", label or "?", detail)
+    reason = f"validate v{p} ({detail})"
     return Phase2Result("to_phase3", reason=reason, lisa_job=lisa_job)
 
 
@@ -422,10 +490,11 @@ def run_phase2(
     if lisa_jobs_path:
         write_lisa_jobs(lisa_jobs, lisa_jobs_path)
     # Like Phase 1 (which stays silent when no new distro is found), only send
-    # the summary e-mail when there is something to report. An empty Phase 1
-    # hand-off (no new distros) yields empty buckets here, so skip the mail
-    # instead of sending an empty summary.
-    if to_phase3 or trusted or pending_publish or unsupported or errors:
+    # the summary e-mail when there is something ACTIONABLE to report. The daily
+    # known_supported re-check produces a big ``trusted`` bucket every run, so
+    # trusted-only (nothing newer shipped) is NOT worth an e-mail -- it would be
+    # daily noise. Mail only on to_phase3 / pending_publish / unsupported / errors.
+    if to_phase3 or pending_publish or unsupported or errors:
         notifier.notify_summary(
             processed=len(entries),
             to_phase3=to_phase3,
@@ -436,7 +505,7 @@ def run_phase2(
         )
     else:
         logger.info(
-            "Phase 2: nothing to report (no distros processed); "
+            "Phase 2: nothing actionable (only trusted / nothing newer); "
             "skipping summary e-mail."
         )
     logger.info(

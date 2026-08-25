@@ -129,11 +129,12 @@ class FakeNotifierMod:
 
 
 class FakeDbMod:
-    def __init__(self, matched=True, records=None, pending=None):
+    def __init__(self, matched=True, records=None, pending=None, supported=None):
         self.calls = []
         self.matched = matched
         self.records = records or {}     # identity tuple -> row dict
         self.pending = pending or []     # rows currently pending_publish
+        self.supported = supported or [] # rows currently known_supported
 
     def set_validation_state(self, db_path, identity, state, last_validated_version=None, reason=None):
         self.calls.append((db_path, identity, state, last_validated_version))
@@ -143,7 +144,11 @@ class FakeDbMod:
         return self.records.get((publisher, image, sku, region, architecture), {})
 
     def get_rows_by_state(self, db_path, state):
-        return list(self.pending) if state == "pending_publish" else []
+        if state == "pending_publish":
+            return list(self.pending)
+        if state == "known_supported":
+            return list(self.supported)
+        return []
 
 
 class FakeProd:
@@ -252,6 +257,33 @@ def test_enrich_adds_last_validated_version_from_db():
     assert out[0]["last_validated_version"] == "0.3.2"
 
 
+def test_enrich_carries_last_regressed_version_from_db():
+    # Gate 3 needs the regression marker to avoid re-testing a known-bad package.
+    ident = ("Canonical", "ubuntu-22_04-lts", "server", "eastus", "x86_64")
+    db = FakeDbMod(records={ident: {"validated": "known_supported",
+                                    "last_validated_version": "0.3.400",
+                                    "last_regressed_version": "0.3.458"}})
+
+    out = run.enrich_and_merge([_entry()], db, "db")
+
+    assert out[0]["last_validated_version"] == "0.3.400"
+    assert out[0]["last_regressed_version"] == "0.3.458"
+
+
+def test_enrich_carries_image_version_and_timestamp_from_db():
+    # Gate 3's image-drift check needs the validated image version + timestamp.
+    ident = ("Canonical", "ubuntu-22_04-lts", "server", "eastus", "x86_64")
+    db = FakeDbMod(records={ident: {"validated": "known_supported",
+                                    "last_validated_version": "0.3.458",
+                                    "last_validated_image_version": "22.04.202601",
+                                    "last_validated": "2026-08-01T00:00:00Z"}})
+
+    out = run.enrich_and_merge([_entry()], db, "db")
+
+    assert out[0]["last_validated_image_version"] == "22.04.202601"
+    assert out[0]["last_validated"] == "2026-08-01T00:00:00Z"
+
+
 def test_enrich_merges_pending_publish_rows_and_dedupes():
     e = _entry()
     dup_row = {**e, "last_validated_version": ""}        # same identity -> not duplicated
@@ -272,11 +304,12 @@ def _ident(e):
     return (e["publisher"], e["image"], e["sku"], e["region"], e["architecture"])
 
 
-def test_enrich_skips_in_flight_and_terminal_db_states():
+def test_enrich_skips_in_flight_and_unsupported_but_rechecks_supported():
     # A reused Phase 1 artifact still lists images Phase 2 already handled. The DB
-    # state is authoritative, so an in-flight (pending_validation) or already-ruled
-    # (known_supported/known_unsupported) image is NOT re-dispatched -- only the
-    # fresh `unknown` survives. This is the idempotency / no-double-dispatch guard.
+    # state is authoritative: in-flight (pending_validation) and terminal
+    # (known_unsupported) images are NOT re-dispatched. known_supported is NO
+    # longer skipped -- it flows on (tagged _db_state) so Gate 3 can re-check the
+    # prod AzNFS version and re-validate on a newer package.
     e_inflight = _entry(sku="inflight")
     e_supported = _entry(sku="supported")
     e_unsupported = _entry(sku="unsupported")
@@ -290,7 +323,10 @@ def test_enrich_skips_in_flight_and_terminal_db_states():
 
     out = run.enrich_and_merge([e_inflight, e_supported, e_unsupported, e_fresh], db, "db")
 
-    assert [r["sku"] for r in out] == ["fresh"]
+    assert [r["sku"] for r in out] == ["supported", "fresh"]
+    supported = next(r for r in out if r["sku"] == "supported")
+    assert supported["_db_state"] == "known_supported"
+    assert supported["last_validated_version"] == "0.3.458"
 
 
 def test_enrich_keeps_pending_publish_artifact_entry():
@@ -303,6 +339,41 @@ def test_enrich_keeps_pending_publish_artifact_entry():
 
     assert len(out) == 1
     assert out[0]["sku"] == "server"
+
+
+def test_enrich_refeeds_known_supported_rows_for_recheck():
+    # Even when Phase 1 does not re-emit an already-validated distro (its
+    # marketplace image did not change), enrich re-feeds every known_supported
+    # DB row so Gate 3 re-checks the prod AzNFS version. Rows are tagged
+    # _db_state and carry last_validated_version.
+    supported_row = {
+        "publisher": "Canonical", "image": "ubuntu-24_04-lts", "sku": "server",
+        "region": "eastus", "architecture": "x86_64", "family": "apt",
+        "distro_label": "Ubuntu 24.04", "last_validated_version": "0.3.400",
+    }
+    db = FakeDbMod(supported=[supported_row])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert len(out) == 1
+    assert out[0]["distro_label"] == "Ubuntu 24.04"
+    assert out[0]["_db_state"] == "known_supported"
+    assert out[0]["last_validated_version"] == "0.3.400"
+
+
+def test_enrich_refeed_dedupes_supported_against_incoming_entry():
+    # A known_supported distro that IS in the incoming artifact (e.g. its image
+    # updated) is not duplicated by the re-feed.
+    e = _entry()
+    db = FakeDbMod(
+        records={_ident(e): {"validated": "known_supported", "last_validated_version": "0.3.2"}},
+        supported=[{**e, "last_validated_version": "0.3.2"}],
+    )
+
+    out = run.enrich_and_merge([e], db, "db")
+
+    assert len(out) == 1
+    assert out[0]["_db_state"] == "known_supported"
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +429,8 @@ def test_run_end_to_end_trusted(tmp_path):
     )
 
     assert jobs == []
+    # Gate 3 still records the trusted verdict in the DB (known_supported)...
     assert db_mod.calls[-1][2] == "known_supported"
-    assert len(notifier_mod.summaries) == 1
-    assert [r["label"] for r in notifier_mod.summaries[-1]["trusted"]] == ["Ubuntu 22.04"]
+    # ...but a trusted-only run is NOT actionable, so no summary e-mail is sent
+    # (the daily known_supported re-check would otherwise mail every run).
+    assert notifier_mod.summaries == []

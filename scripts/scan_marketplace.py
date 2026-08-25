@@ -510,7 +510,11 @@ def main() -> int:
     # ------------------------------------------------------------------
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
-    phase2_input = format_phase2_input(_exclude_distros(new_images))
+    # Emit new SKUs AND updated ones (a newer marketplace image version of a
+    # tracked SKU) so a refreshed image is re-validated. Gate 3 still decides
+    # whether the AzNFS package actually changed, so an unchanged package just
+    # stays trusted (no VM).
+    phase2_input = format_phase2_input(_exclude_distros(new_images + updated_images))
     with open(config.OUTPUT_JSON, "w", encoding="utf-8") as fh:
         json.dump(phase2_input, fh, indent=2)
     logger.info(

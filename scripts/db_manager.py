@@ -56,6 +56,10 @@ def _lazy_migrate(conn: sqlite3.Connection) -> None:
         adds.append("ALTER TABLE images ADD COLUMN distro_label TEXT NOT NULL DEFAULT ''")
     if "last_validated_version" not in cols:
         adds.append("ALTER TABLE images ADD COLUMN last_validated_version TEXT NOT NULL DEFAULT ''")
+    if "last_validated_image_version" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN last_validated_image_version TEXT NOT NULL DEFAULT ''")
+    if "last_regressed_version" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN last_regressed_version TEXT NOT NULL DEFAULT ''")
     if "reason" not in cols:
         adds.append("ALTER TABLE images ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
     if adds:
