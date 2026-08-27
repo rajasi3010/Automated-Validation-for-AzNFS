@@ -506,7 +506,7 @@ def main() -> int:
             )
 
     # ------------------------------------------------------------------
-    # Step 5 ΓÇö Write JSON output  (only new unknowns go to Phase 2)
+    # Step 5 - Write JSON output  (new and updated SKUs go to Phase 2)
     # ------------------------------------------------------------------
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 

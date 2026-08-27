@@ -247,7 +247,7 @@ def _send_summary(
     unsupported: List[Dict[str, str]],
     regressions: List[Dict[str, str]] | None = None,
 ) -> None:
-    """The single end-of-run e-mail: pass / fail (+ package-regression) tables."""
+    """The single end-of-run e-mail: pass / fail (+ package/image-regression) tables."""
     regressions = regressions or []
     reg_subject = f", {len(regressions)} regressed" if regressions else ""
     subject = (
