@@ -193,7 +193,7 @@ highlights:
 | `distro_label` | Human-readable name, e.g. `Ubuntu 24.04`, `RHEL 9`, `Rocky 9`. |
 | `version` | Latest version observed. Bumped in place on a new release. |
 | `validated` | The persisted validation state. Only three values are ever stored: `unknown`, `known_supported`, and `known_unsupported`. (`pending_publish` and `pending_validation` are used only as labels in the summary e-mail — they are never written to the DB; see the Phase 2 section below.) **Preserved across version bumps** so manual validation state is not lost. Surfaced in the Phase 1 JSON as `validation_status`. |
-| `last_validated`, `last_validated_version` | Stamped by Phase 2/3 when a verdict is recorded. |
+| `last_validated`, `last_validated_version`, `last_validated_image_version`, `last_regressed_version` | Stamped by Phase 2/3 when a verdict is recorded: the timestamp, the validated AzNFS version + marketplace image (Gate 3's re-validation baselines), and the AzNFS version that regressed on an already-supported distro (if any). |
 | `date_added`, `last_modified`, `last_checked` | All reset to "now" on a version bump. |
 
 A small `meta` key/value table (same DB) holds cross-run state such as the
@@ -269,7 +269,8 @@ known-unsupported).
 line with the image URN, the run logs URL, and the DB state transition, e.g.:
 
 - pass: `validation done for distro RHEL 9.5` → `validation_state changed to known_supported in DB`
-- fail: `validation fails for distro "SLES 16"` → failing tier + `validation_state changed to known_unsupported in DB`
+- fail (not-yet-supported): `validation fails for distro "SLES 16"` → failing tier + `validation_state changed to known_unsupported in DB`
+- regression (was `known_supported`): the distro **stays** `known_supported`; the summary reports the failing package/image as a regression instead of demoting it.
 
 Notification failures are caught and logged — they never crash a run.
 
@@ -308,9 +309,15 @@ RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
 
 Each emitted job provisions a fresh VM and runs the AzNFS 5-tier suite
 (artifact integrity → install lifecycle → post-install footprint → mount + I/O →
-basic resilience). A clean pass records `known_supported`; any failure records
-`known_unsupported` (one strike — a human resets the DB row to `unknown` if a
-transient/flaky failure buried a good distro). See [`docs/PHASE3.md`](docs/PHASE3.md)
+basic resilience). A clean pass records `known_supported`. A failure on a
+not-yet-supported distro records `known_unsupported` (one strike — a human resets
+the DB row to `unknown` if a transient/flaky failure buried a good distro). A
+failure on an **already-`known_supported`** distro is treated as a **regression**,
+not a demotion: the distro stays `known_supported` at its last-good version, the
+failing package is recorded in `last_regressed_version`, an alert is sent, and it
+auto-recovers when a fixed package ships (an image-only regression is labelled as
+such). Phase 2 also re-validates a supported distro when its **marketplace image**
+changes, rate-limited by `PHASE3_IMAGE_REVALIDATE_DAYS`. See [`docs/PHASE3.md`](docs/PHASE3.md)
 for the full design, the test tiers, and bring-up findings.
 
 ## Exit codes (Phase 1)
@@ -349,6 +356,7 @@ Optional **repository variables**:
 | `PHASE3_CONCURRENCY` | Phase 3 | `1` (forced to 1 while a pinned RG is set) |
 | `PHASE3_MAX_PARALLEL_DISTROS` | Phase 3 | `1` (distros validated at once) |
 | `PHASE3_RESOURCE_GROUP` | Phase 3 | `lisa-aznfs-phase3` (pre-created RG all envs share) |
+| `PHASE3_IMAGE_REVALIDATE_DAYS` | Phase 2 | `15` (days before a changed marketplace image re-validates a supported distro; `0` disables) |
 
 Required RBAC on the Managed Identity:
 

@@ -33,6 +33,19 @@ CREATE TABLE IF NOT EXISTS images (
                                       -- empty = never validated. Phase 2 compares the numeric-latest
                                       -- published prod version against this to decide if (re)validation
                                       -- is needed. Compare NUMERICALLY, never as strings.
+    last_validated_image_version TEXT NOT NULL DEFAULT '',
+                                      -- Marketplace IMAGE version validated at the last pass (e.g.
+                                      -- '22.04.202608180'). Phase 2 re-validates when the current image
+                                      -- differs AND >= PHASE3_IMAGE_REVALIDATE_DAYS have passed, so OS
+                                      -- rebuilds are re-checked without re-running on every daily bump.
+    last_regressed_version TEXT NOT NULL DEFAULT '',
+                                      -- AzNFS version that FAILED on a distro that was already
+                                      -- known_supported. Covers BOTH a package regression and an
+                                      -- image regression (the same version failing on a newer
+                                      -- marketplace image). The distro stays known_supported at
+                                      -- last_validated_version; Phase 2 will NOT re-test this exact
+                                      -- version, but a strictly newer package supersedes it
+                                      -- (auto-recovery). Cleared on the next pass.
     reason        TEXT    NOT NULL DEFAULT '',
                                       -- Human-readable verdict reason, set by Phase 2/3 when a row is
                                       -- marked known_unsupported (e.g. "prod repo is missing"). Cleared

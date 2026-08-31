@@ -150,15 +150,34 @@ def entries_from_db(
     )
 
 
-# DB ``validated`` states that mean Phase 2 is already finished with an image and
-# must NOT re-process it. Skipping these is what makes a manual re-run idempotent
-# against a reused Phase 1 artifact, and what stops Phase 2 from re-dispatching a
-# job that Phase 3 is still validating (or has already ruled on) -- the same DB
-# row both phases share:
-#   pending_validation      -> a LISA job is already in flight at Phase 3
-#   known_supported/-unsupported -> Phase 3 already returned a verdict
-# Only ``unknown`` (fresh from Phase 1) and re-queued ``pending_publish`` flow on.
-_SKIP_STATES = frozenset({"pending_validation", "known_supported", "known_unsupported"})
+# DB ``validated`` states that Phase 2 must NOT re-process:
+#   pending_validation  -> a LISA job is already in flight at Phase 3
+#   known_unsupported   -> terminal verdict (reset explicitly to re-try)
+# ``known_supported`` is deliberately NOT skipped: it is re-fed below so Gate 3
+# can compare the current prod AzNFS version against last_validated_version and
+# re-validate when a newer package ships (an unchanged package stays trusted, no
+# VM). ``unknown`` (fresh from Phase 1) and re-queued ``pending_publish`` flow on.
+_SKIP_STATES = frozenset({"pending_validation", "known_unsupported"})
+
+
+def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(distro_label prefixes, offer/sku substrings) excluded from the
+    known_supported re-feed -- the same env-driven policy as Phase 1
+    (``EXCLUDED_DISTRO_PREFIXES`` / ``EXCLUDED_OFFER_SUBSTRINGS``, same defaults).
+
+    Read straight from the environment rather than ``import config``: config.py
+    reads a required ``AZURE_SUBSCRIPTION_ID`` at import time, so importing it in a
+    bare/manual Phase 2 run without that Azure-only variable would raise and
+    (via the caller's guard) silently disable the whole re-feed.
+    """
+    def _split(var: str, default: str) -> tuple[str, ...]:
+        return tuple(
+            s.strip().casefold()
+            for s in os.environ.get(var, default).split(",")
+            if s.strip()
+        )
+    return (_split("EXCLUDED_DISTRO_PREFIXES", "centos"),
+            _split("EXCLUDED_OFFER_SUBSTRINGS", "advanced-sla"))
 
 
 def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
@@ -166,16 +185,20 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
 
     The DB ``validated`` state is authoritative:
 
-    * Skip any image already ``pending_validation`` / ``known_supported`` /
-      ``known_unsupported`` -- it is in flight at Phase 3 or already has a
-      verdict, so re-processing would double-dispatch the LISA job (and could
-      race a concurrent Phase 3 writing the same DB row). A manual re-run reuses
-      the previous Phase 1 artifact, so this skip is what keeps it idempotent.
-    * Enrich the survivors with their DB ``last_validated_version`` (Gate 3's
-      baseline).
+    * Skip any image already ``pending_validation`` (in flight at Phase 3) or
+      ``known_unsupported`` (terminal until an explicit reset). Skipping keeps a
+      re-run over a reused Phase 1 artifact idempotent and avoids double-
+      dispatching / racing a concurrent Phase 3.
+    * Enrich the survivors with their DB ``last_validated_version`` and tag their
+      ``_db_state`` (Gate 3's baseline; the tag lets process_entry avoid
+      downgrading a known_supported distro on a transient re-check failure).
     * Merge images parked ``pending_publish`` on a previous run so they re-flow
       once the package is finally published, even if Phase 1 did not re-emit
       them. De-duplicated against the incoming entries by identity.
+    * Re-feed every ``known_supported`` distro so Gate 3 re-checks the current
+      prod AzNFS version against ``last_validated_version`` -- a newer package
+      re-validates, an unchanged one stays trusted (no VM). This is what makes a
+      new AzNFS release re-validate an already-supported distro.
     """
     out: list[dict] = []
     seen: set[tuple] = set()
@@ -184,18 +207,27 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
         ident = _identity(e)
         seen.add(ident)
         v_last = e.get("last_validated_version", "")
+        v_regressed = e.get("last_regressed_version", "")
+        v_img = e.get("last_validated_image_version", "")
+        ts = e.get("last_validated", "")
         state = None
         try:
             rec = db_mod.get_image_record(db_path, *ident)
             if rec:
                 state = rec.get("validated")
                 v_last = rec.get("last_validated_version", v_last)
+                v_regressed = rec.get("last_regressed_version", v_regressed)
+                v_img = rec.get("last_validated_image_version", v_img)
+                ts = rec.get("last_validated", ts)
         except Exception:  # pragma: no cover - DB best-effort; entry default stands
             logger.debug("DB lookup failed for %s; using entry default", ident)
         if state in _SKIP_STATES:
             logger.info("Skipping %s: DB state %r (already handled / in flight at Phase 3)", ident, state)
             continue
-        out.append({**e, "last_validated_version": v_last or ""})
+        out.append({**e, "last_validated_version": v_last or "",
+                    "last_regressed_version": v_regressed or "",
+                    "last_validated_image_version": v_img or "",
+                    "last_validated": ts or "", "_db_state": state})
 
     try:
         for row in db_mod.get_rows_by_state(db_path, "pending_publish"):
@@ -209,6 +241,44 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
             out.append(row)  # DB rows already carry family / distro_label / last_validated_version
     except Exception:  # pragma: no cover - re-entry is best-effort
         logger.exception("pending_publish merge skipped")
+
+    # Re-feed already-validated distros so Gate 3 re-checks the current prod
+    # AzNFS version against last_validated_version: a NEWER package -> re-validate;
+    # an unchanged one -> trusted (no VM). Tagged _db_state so process_entry never
+    # DOWNGRADES a known_supported distro if the re-check hits a transient prod
+    # hiccup. Collapsed to ONE representative per (distro_label, architecture) --
+    # newest marketplace version -- matching Phase 3's per-URL dedup so a release
+    # is re-validated once, not once per SKU; and filtered by the same exclusion
+    # policy Phase 1 uses so a stale row for a non-deployable distro/offer
+    # (e.g. CentOS, advanced-sla) is not re-fed. Deduped against entries above.
+    try:
+        distro_prefixes, offer_subs = _load_exclusions()
+
+        def _excluded(row: dict) -> bool:
+            label = (row.get("distro_label") or "").casefold()
+            hay = f"{row.get('image', '')} {row.get('sku', '')}".casefold()
+            return (any(label.startswith(p) for p in distro_prefixes)
+                    or any(s in hay for s in offer_subs))
+
+        reps: dict[tuple, dict] = {}
+        for row in db_mod.get_rows_by_state(db_path, "known_supported"):
+            if _excluded(row):
+                continue
+            key = (row.get("distro_label", ""), row.get("architecture", ""))
+            cur = reps.get(key)
+            if cur is None or (row.get("version", "") > cur.get("version", "")):
+                reps[key] = row
+        for row in reps.values():
+            ident = (
+                row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
+                row.get("region", ""), row.get("architecture", ""),
+            )
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append({**row, "_db_state": "known_supported"})
+    except Exception:  # pragma: no cover - re-check is best-effort
+        logger.exception("known_supported re-check re-feed skipped")
 
     return out
 

@@ -96,6 +96,9 @@ def _ensure_phase3_columns(conn: sqlite3.Connection) -> None:
     for ddl in (
         "ALTER TABLE images ADD COLUMN last_validated TEXT",
         "ALTER TABLE images ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE images ADD COLUMN last_validated_version TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE images ADD COLUMN last_regressed_version TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE images ADD COLUMN last_validated_image_version TEXT NOT NULL DEFAULT ''",
     ):
         try:
             conn.execute(ddl)
@@ -104,7 +107,12 @@ def _ensure_phase3_columns(conn: sqlite3.Connection) -> None:
             pass  # duplicate column name - already added in a prior run
 
 
-def _record_validation(image_key: Dict[str, str], validated: str, reason: str = "") -> None:
+def _record_validation(
+    image_key: Dict[str, str], validated: str, reason: str = "",
+    last_validated_version: str | None = None,
+    last_regressed_version: str | None = None,
+    last_validated_image_version: str | None = None,
+) -> None:
     """Set validated + last_validated (+ reason) on the matching images row.
 
     Matches on (publisher, image, sku, region, architecture) - the SAME identity
@@ -113,39 +121,68 @@ def _record_validation(image_key: Dict[str, str], validated: str, reason: str = 
     marketplace version, so it updated zero rows). ``reason`` is the verdict
     reason (empty on a pass, the failure reason on known_unsupported); it is
     surfaced in the monthly digest's known_unsupported table.
+
+    On a pass, ``last_validated_version`` is the AzNFS version that was validated
+    and ``last_validated_image_version`` is the marketplace image it ran on (used
+    by Phase 2's rate-limited image-drift re-validation). ``last_regressed_version``
+    records a newer package that FAILED on an already-supported distro (set on
+    regression, "" to clear on a pass). Leave any of them None to preserve the
+    stored value.
     """
     now = _now_iso()
     conn = sqlite3.connect(config.DB_PATH)
     try:
         _ensure_phase3_columns(conn)
+        set_cols = ["validated = ?", "last_validated = ?", "last_modified = ?", "reason = ?"]
+        params: list = [validated, now, now, reason]
+        if last_validated_version is not None:
+            set_cols.append("last_validated_version = ?")
+            params.append(last_validated_version)
+        if last_regressed_version is not None:
+            set_cols.append("last_regressed_version = ?")
+            params.append(last_regressed_version)
+        if last_validated_image_version is not None:
+            set_cols.append("last_validated_image_version = ?")
+            params.append(last_validated_image_version)
+        params.extend([
+            image_key["publisher"], image_key["image"], image_key["sku"],
+            image_key["region"], image_key["architecture"],
+        ])
         cur = conn.execute(
-            """
+            f"""
             UPDATE images
-               SET validated      = ?,
-                   last_validated = ?,
-                   last_modified  = ?,
-                   reason         = ?
+               SET {", ".join(set_cols)}
              WHERE publisher    = ?
                AND image        = ?
                AND sku          = ?
                AND region       = ?
                AND architecture = ?
             """,
-            (
-                validated,
-                now,
-                now,
-                reason,
-                image_key["publisher"],
-                image_key["image"],
-                image_key["sku"],
-                image_key["region"],
-                image_key["architecture"],
-            ),
+            params,
         )
         conn.commit()
         if cur.rowcount == 0:
             logger.warning("no images row matched %s (state=%s)", image_key, validated)
+    finally:
+        conn.close()
+
+
+def _current_validation(image_key: Dict[str, str]) -> Tuple[str, str, str]:
+    """Return (validated, last_validated_version, last_validated_image_version)
+    for the row, ("", "", "") if none."""
+    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        _ensure_phase3_columns(conn)
+        row = conn.execute(
+            """
+            SELECT validated, last_validated_version, last_validated_image_version FROM images
+             WHERE publisher = ? AND image = ? AND sku = ?
+               AND region = ? AND architecture = ?
+            """,
+            (image_key["publisher"], image_key["image"], image_key["sku"],
+             image_key["region"], image_key["architecture"]),
+        ).fetchone()
+        return (row[0] or "", row[1] or "", row[2] or "") if row else ("", "", "")
     finally:
         conn.close()
 
@@ -208,11 +245,14 @@ def _send_summary(
     processed: int,
     supported: List[Dict[str, str]],
     unsupported: List[Dict[str, str]],
+    regressions: List[Dict[str, str]] | None = None,
 ) -> None:
-    """The single end-of-run e-mail: two readable tables (pass / fail)."""
+    """The single end-of-run e-mail: pass / fail (+ package/image-regression) tables."""
+    regressions = regressions or []
+    reg_subject = f", {len(regressions)} regressed" if regressions else ""
     subject = (
         f"[AzNFS Phase 3] validation summary: {len(supported)} supported, "
-        f"{len(unsupported)} unsupported (of {processed})"
+        f"{len(unsupported)} unsupported{reg_subject} (of {processed})"
     )
 
     def _plain(rows, keys):
@@ -227,13 +267,16 @@ def _send_summary(
         f"a) Validation successful (known_supported) ({len(supported)}):\n"
         f"{_plain(supported, ['label', 'arch'])}\n\n"
         f"b) Validation fails (kept in known_unsupported) ({len(unsupported)}):\n"
-        f"{_plain(unsupported, ['label', 'arch', 'urn', 'logs_url', 'reason'])}"
+        f"{_plain(unsupported, ['label', 'arch', 'urn', 'logs_url', 'reason'])}\n\n"
+        f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)}):\n"
+        f"{_plain(regressions, ['label', 'arch', 'urn', 'logs_url', 'reason'])}"
     )
 
     html_body = (
         "<div style='font-family:Segoe UI,sans-serif;color:#24292e'>"
         f"<p style='font-size:14px'>Phase 3 validated <b>{processed}</b> distro(s) with LISA &mdash; "
-        f"<b>{len(supported)}</b> supported, <b>{len(unsupported)}</b> unsupported.</p>"
+        f"<b>{len(supported)}</b> supported, <b>{len(unsupported)}</b> unsupported, "
+        f"<b>{len(regressions)}</b> regressed.</p>"
         + _table_html(
             f"a) Validation successful (known_supported) ({len(supported)})",
             [("label", "Distro"), ("arch", "Arch")],
@@ -250,6 +293,17 @@ def _send_summary(
             ],
             unsupported,
         )
+        + _table_html(
+            f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)})",
+            [
+                ("label", "Distro"),
+                ("arch", "Arch"),
+                ("urn", "Image URN"),
+                ("logs_url", "Logs URL"),
+                ("reason", "Reason"),
+            ],
+            regressions,
+        )
         + "</div>"
     )
     _notify(subject, plain, html_body=html_body)
@@ -259,11 +313,51 @@ def _send_summary(
 # Orchestration
 # ---------------------------------------------------------------------------
 def process_job(job: LisaJob) -> Tuple[str, str]:
-    """Record one distro's verdict. Returns (validated_state, failure_reason)."""
+    """Record one distro's verdict. Returns (validated_state, failure_reason).
+
+    A LISA failure on a distro that is ALREADY known_supported is treated as a
+    package REGRESSION, not a distro becoming unsupported: the distro stays
+    known_supported at its last-good ``last_validated_version`` (so it keeps being
+    re-checked and auto-recovers when a fixed package ships), and the failing
+    version is stored in ``last_regressed_version`` so Phase 2 will not re-test /
+    re-alert that exact package (a strictly newer one supersedes it). A failure on
+    any other prior state (first-time / retry) is a real known_unsupported.
+    """
     if job.lisa_passed:
         logger.info("[%s] LISA PASSED -> recording known_supported in DB", job.distro_label)
-        _record_validation(job.image_key(), "known_supported", reason="")
+        _record_validation(job.image_key(), "known_supported", reason="",
+                           last_validated_version=job.aznfs_version,
+                           last_regressed_version="",
+                           last_validated_image_version=job.version)
         return "known_supported", ""
+    prior_state, prior_version, prior_image = _current_validation(job.image_key())
+    if prior_state == "known_supported":
+        # Distinguish an IMAGE regression (the SAME AzNFS package that previously
+        # passed now fails on a newer marketplace image) from a PACKAGE regression
+        # (a newer AzNFS package fails). Gate 3 only re-emits a supported distro
+        # for a newer package OR an image drift, so an unchanged package version
+        # means the OS image was the trigger. The DB also encodes this:
+        # last_regressed_version == last_validated_version => image regression.
+        if prior_version and job.aznfs_version == prior_version:
+            reason = (
+                f"image regression: AzNFS {job.aznfs_version} (unchanged) regressed on "
+                f"new image {job.version} (last good image {prior_image or '?'}); "
+                f"kept known_supported: {job.failure_reason or 'validation failed'}"
+            )
+        else:
+            reason = (
+                f"package regression: AzNFS {job.aznfs_version} regressed "
+                f"(last good v{prior_version or '?'}); "
+                f"kept known_supported: {job.failure_reason or 'validation failed'}"
+            )
+        logger.warning("[%s] LISA FAILED -> %s, keeping known_supported: %s",
+                       job.distro_label, reason.split(':', 1)[0].upper(),
+                       job.failure_reason or "no reason")
+        # Keep last_validated_version/-image at the last-good values; mark the
+        # failing package as regressed so Phase 2 will not re-test it.
+        _record_validation(job.image_key(), "known_supported", reason="",
+                           last_regressed_version=job.aznfs_version)
+        return "regression", reason
     logger.info("[%s] LISA FAILED (%s) -> recording known_unsupported in DB",
                 job.distro_label, job.failure_reason or "no reason")
     _record_validation(job.image_key(), "known_unsupported", reason=job.failure_reason)
@@ -276,10 +370,11 @@ def run(jobs: List[LisaJob]) -> Dict[str, int]:
     # is nothing to validate: no jobs means no verdicts, so skip the e-mail.
     if not jobs:
         logger.info("Phase 3: no jobs to record; skipping summary e-mail.")
-        return {"known_supported": 0, "known_unsupported": 0}
+        return {"known_supported": 0, "known_unsupported": 0, "regressions": 0}
     run_url = _github_run_url()
     supported: List[Dict[str, str]] = []
     unsupported: List[Dict[str, str]] = []
+    regressions: List[Dict[str, str]] = []
     for job in jobs:
         label = job.distro_label or f"{job.publisher}/{job.image}/{job.sku}"
         logs_url = job.logs_url or run_url or "n/a"
@@ -287,6 +382,11 @@ def run(jobs: List[LisaJob]) -> Dict[str, int]:
         state, reason = process_job(job)
         if state == "known_supported":
             supported.append({"label": label, "arch": job.arch})
+        elif state == "regression":
+            regressions.append(
+                {"label": label, "arch": job.arch, "urn": urn,
+                 "logs_url": logs_url, "reason": reason}
+            )
         else:
             unsupported.append(
                 {
@@ -297,14 +397,15 @@ def run(jobs: List[LisaJob]) -> Dict[str, int]:
                     "reason": reason or "validation failed",
                 }
             )
-    _send_summary(len(jobs), supported, unsupported)
+    _send_summary(len(jobs), supported, unsupported, regressions)
     logger.info(
-        "Phase 3: %d supported, %d unsupported (of %d)",
-        len(supported), len(unsupported), len(jobs),
+        "Phase 3: %d supported, %d unsupported, %d regressed (of %d)",
+        len(supported), len(unsupported), len(regressions), len(jobs),
     )
     return {
         "known_supported": len(supported),
         "known_unsupported": len(unsupported),
+        "regressions": len(regressions),
     }
 
 

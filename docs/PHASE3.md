@@ -20,10 +20,14 @@ that distro, install the package, and assert it works — producing a pass/fail
 | Phase 2 | `lisa_jobs.json` (distro + prod package URL + version) | Confirm the package is published on PMC prod |
 | **Phase 3** | **Pass/fail per distro** | **Provision VM, install, validate, record** |
 
-A LISA pass marks the distro `known_supported`; a failure marks it
-`known_unsupported`. Skips (e.g. wrong package family) are recorded separately
-and do not count as failures. Phase 3 is **LISA testing only** — it does not
-query PMC prod (Phase 2 already owns that check).
+A LISA pass marks the distro `known_supported`. A failure marks a
+*not-yet-supported* distro `known_unsupported`; a failure on an
+**already-`known_supported`** distro is instead a **regression** — the distro
+stays `known_supported` at its last-good version and the failing package is
+recorded in `last_regressed_version` (see below). Skips (e.g. wrong package
+family) are recorded separately and do not count as failures. Phase 3 is
+**LISA testing only** — it does not query PMC prod (Phase 2 already owns that
+check).
 
 ## What is under test
 
@@ -255,19 +259,27 @@ LISA testing only \u2014 there is **no PMC prod query** here (Phase 2 already ow
 verdict in the shared SQLite `images` table and, at the **end of the run**, sends
 **one** summary e-mail.
 
-- **LISA pass** \u2192 `validated = known_supported`, `last_validated = now`.
-- **LISA fail** \u2192 `validated = known_unsupported`, `last_validated = now`. This
-  is terminal \u2014 there is no automatic retry. A LISA failure can be a real
-  package problem **or** a transient/flaky run (slow boot, SSH timeout); if a
-  flake wrongly buries a good distro, a human resets that row's `validated` back
-  to `unknown` so the pipeline re-validates it.
+- **LISA pass** → `validated = known_supported`, `last_validated = now` (+ the
+  validated AzNFS version and marketplace image are recorded as Gate 3 baselines).
+- **LISA fail on a not-yet-supported distro** → `validated = known_unsupported`,
+  `last_validated = now`. This is terminal — no automatic retry. A failure can be
+  a real package problem **or** a transient/flaky run (slow boot, SSH timeout);
+  if a flake wrongly buries a good distro, a human resets that row's `validated`
+  back to `unknown` so the pipeline re-validates it.
+- **LISA fail on an already-`known_supported` distro** → a **regression**, not a
+  demotion: the distro stays `known_supported` at its last-good version, the
+  failing package is recorded in `last_regressed_version` (so it is not re-tested
+  until a newer package ships), and the summary flags it. An image-only regression
+  (same package, newer image) is labelled as such.
 
 ```mermaid
 flowchart TD
     L{LISA result?} -->|pass| S[validated = known_supported<br/>last_validated = now]
-    L -->|fail| U[validated = known_unsupported<br/>last_validated = now<br/>+ failing tier in the summary]
+    L -->|fail<br/>not-yet-supported| U[validated = known_unsupported<br/>last_validated = now<br/>+ failing tier in the summary]
+    L -->|fail<br/>already known_supported| R[stays known_supported<br/>last_regressed_version = failing pkg<br/>+ regression alert]
     S --> E[one summary e-mail<br/>all distros + reasons]
     U --> E
+    R --> E
 ```
 
 The DB row is matched on the **same 5-key identity Phase 1/Phase 2 use**
