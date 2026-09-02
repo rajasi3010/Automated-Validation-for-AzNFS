@@ -6,13 +6,17 @@ Linux images, checks whether the AzNFS package is published for them on PMC
 distro with **LISA**, and records a per-distro support decision — all unattended
 on a self-hosted runner.
 
+**➡ [Current validation status](STATUS.md)** — which distros are supported,
+unsupported (with the reason), or not yet validated. Regenerated automatically
+by the pipeline; no setup needed to read it.
+
 ## Pipeline overview
 
 | Phase | Workflow (`name`) | What it does | Output |
 |---|---|---|---|
 | **Phase 1 — Scan** (`scripts/`) | `Scan Marketplace Images` | Discover marketplace images for the tracked publishers/regions, classify Unknown / Known_supported / Known_unsupported in SQLite, e-mail new releases plus a monthly status digest. | `output/needs_validation.json` |
-| **Phase 2 — Prod validation** (`src/phase2/`) | `Phase 2 - Validate against PMC prod` | For each image, check the version-indexed PMC **prod** layout (`packages.microsoft.com/<distro>/<version>/prod/`): does the repo exist? is the tracked `0.3.x` AzNFS package published for this arch? is it newer than what was last validated? Apply the AzNFS support policy. Emit a LISA job for the ones that need testing. | `output/lisa_jobs.json` |
-| **Phase 3 — LISA validation** (`phase3/`) | `Phase 3 - Validate AzNFS with LISA` | Provision a VM of each distro, install the AzNFS package, run the 5-tier test suite, and record `known_supported` / `known_unsupported` in the shared DB, with one summary e-mail. | DB verdict + e-mail |
+| **Phase 2 — Prod validation** (`src/phase2/`) | `Phase 2 - Validate against PMC prod` | For each image, check the version-indexed PMC **prod** layout (`packages.microsoft.com/<distro>/<version>/prod/`): does the repo exist? is the tracked `0.3.x` AzNFS package published for this arch? has the latest-published package changed since validation? Apply the AzNFS support policy and create/link Bugs for unsupported results. | `output/lisa_jobs.json` |
+| **Phase 3 — LISA validation** (`phase3/`) | `Phase 3 - Validate AzNFS with LISA` | Provision a VM of each distro, install the AzNFS package, run the 5-tier test suite, record `known_supported` / `known_unsupported` in the shared DB, and create/link Bugs for true unsupported verdicts. | DB verdict + e-mail |
 
 The three phases share one SQLite DB (`marketplace.db`); a distro's
 `validation_status` (the DB `validated` column) is the hand-off between them.
@@ -261,9 +265,32 @@ tracked distro release grouped into **three buckets by AzNFS validation state**
 
 - `[AzFilesAutoPackager] Monthly reminder: 8 supported, 3 unsupported, 1 unknown`
 
+The same buckets can be queried on demand, without waiting for the digest and
+without Azure credentials (it only reads the SQLite DB):
+
+```bash
+python scripts/query_status.py                          # all three buckets
+python scripts/query_status.py --state known_unsupported  # one bucket (+ reasons)
+python scripts/query_status.py --distro ubuntu            # substring filter
+python scripts/query_status.py --format json              # machine-readable
+python scripts/query_status.py --skus                     # per-SKU rows, not the rollup
+```
+
+`--db` points at another database (default `$DB_PATH`, else `marketplace.db` in
+the repo root) and `--include-excluded` shows distros normally hidden by
+`EXCLUDED_DISTRO_PREFIXES`. The rollup itself lives in `scripts/status_rollup.py`,
+shared with the monthly e-mail, so both always agree.
+
+The same rollup is published as [`STATUS.md`](STATUS.md) in the repo root, so
+anyone can read the current buckets on GitHub. Phase 1 and Phase 3 regenerate it
+(`--format markdown`) via `.github/scripts/publish_status.sh` and commit it only
+when it changed; the page is also appended to each run's Actions summary. It is
+generated output — edit the pipeline, never the file.
+
 **Phase 2.** Exactly **one** summary e-mail per run, listing every image and —
 for the actionable ones — the reason (to Phase 3, trusted, pending publish, or
-known-unsupported).
+known-unsupported). Pending-publish and known-unsupported rows create or reuse
+an active Azure DevOps Bug and include its link in the summary.
 
 **Phase 3.** Exactly **one** summary e-mail per run. Each distro gets a pass/fail
 line with the image URN, the run logs URL, and the DB state transition, e.g.:
@@ -271,6 +298,10 @@ line with the image URN, the run logs URL, and the DB state transition, e.g.:
 - pass: `validation done for distro RHEL 9.5` → `validation_state changed to known_supported in DB`
 - fail (not-yet-supported): `validation fails for distro "SLES 16"` → failing tier + `validation_state changed to known_unsupported in DB`
 - regression (was `known_supported`): the distro **stays** `known_supported`; the summary reports the failing package/image as a regression instead of demoting it.
+
+A true Phase 3 `known_unsupported` verdict also creates or reuses the same
+distro/architecture Bug and links it in the e-mail. Regressions do not create
+unsupported Bugs because their DB state remains `known_supported`.
 
 Notification failures are caught and logged — they never crash a run.
 
@@ -348,6 +379,21 @@ Required **repository variables** (Settings → Secrets and variables → Action
 | `ACS_SENDER` | all phases | e.g. `DoNotReply@<guid>.azurecomm.net` |
 | `NOTIFY_RECIPIENTS` | Phase 2/3 | Comma-separated recipient list. **Must be set** or Phase 2/3 skip their summary e-mail. (Phase 1 falls back to the default list in `config.py`.) |
 
+Azure DevOps Bug settings are configured in the Phase 2 and Phase 3 workflows:
+organization `msazure`, project `One`, area `One\Xstore\XSMB`, assignee
+`Shyam Prasad`, and tag `AzNFS`. They can be overridden through the corresponding
+`AZDO_ORGANIZATION`, `AZDO_PROJECT`, `AZDO_AREA_PATH`, `AZDO_ASSIGNED_TO`, and
+`AZDO_TAGS` environment variables when running locally. HTTP calls retry transient
+`429` and `5xx` responses three times by default; set `AZDO_HTTP_MAX_RETRIES` to
+override that limit.
+
+Bug titles are `[AzNFS Validation Tool] <distro> (<arch>) is not supported by AzNFS`.
+The title deliberately carries no phase, so Phase 2 and Phase 3 share **one** Bug per
+distro/architecture: whichever phase hits the problem first files it, and later runs
+of either phase link to that same active Bug instead of filing a duplicate. The
+description records which phase detected it, the reason, the pipeline run URL, and
+the next steps. `AZDO_PRODUCT` overrides the `AzNFS Validation Tool` prefix.
+
 Optional **repository variables**:
 
 | Name | Used by | Default |
@@ -366,6 +412,9 @@ Required RBAC on the Managed Identity:
 - `Reader` on the subscription (so the Compute API can list marketplace images).
 - `Communication and Email Service Owner` on the ACS resource (so the MI can
   send via the Email REST API).
+- In Azure DevOps, add the managed identity to the `msazure` organization and
+  grant it permission to view and edit work items under `One\Xstore\XSMB`.
+  Bug creation uses an Azure DevOps managed-identity token; no PAT is stored.
 - On the pinned Phase 3 RG `lisa-aznfs-phase3` (least privilege, scoped to the
   RG — no subscription-wide rights, no `resourcegroups/write`):
   - `Virtual Machine Contributor` — create/delete the test VMs + disks.

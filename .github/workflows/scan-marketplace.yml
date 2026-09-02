@@ -28,6 +28,9 @@ jobs:
       - self-hosted
       - azure-vm-marketplace
 
+    permissions:
+      contents: write
+
     steps:
       # ----------------------------------------------------------------
       # 1. Checkout source
@@ -121,7 +124,15 @@ jobs:
           if-no-files-found: ignore
 
       # ----------------------------------------------------------------
-      # 7. Save updated database to cache for the next run
+      # 7. Refresh the human-readable status page committed in the repo,
+      #    so anyone can see the buckets without running anything.
+      # ----------------------------------------------------------------
+      - name: Publish STATUS.md
+        if: always()
+        run: bash .github/scripts/publish_status.sh
+
+      # ----------------------------------------------------------------
+      # 8. Save updated database to cache for the next run
       # ----------------------------------------------------------------
       - name: Save database cache
         if: always()
