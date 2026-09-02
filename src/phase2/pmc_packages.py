@@ -25,6 +25,8 @@ import re
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -185,6 +187,14 @@ def in_series(version: str, series: str = AZNFS_SERIES) -> bool:
     return len(got) >= len(want) and got[: len(want)] == want
 
 
+class ProbeError(RuntimeError):
+    """PMC could not be reached, so absence of a repo/package is NOT proven.
+
+    Raised instead of reporting "missing", which the gates would otherwise
+    record as a permanent known_unsupported verdict.
+    """
+
+
 class ProdPackageIndex:
     """Lists aznfs package filenames published under a PMC prod version path."""
 
@@ -193,12 +203,28 @@ class ProdPackageIndex:
         base_url: str | None = None,
         timeout: int | None = None,
         session: requests.Session | None = None,
+        max_retries: int | None = None,
     ) -> None:
         self.base_url = (base_url or PROD_BASE).rstrip("/")
         # ``or "30"`` guards against HTTP_TIMEOUT being set-but-empty in CI
         # (an unset repo variable arrives as ''), which int('') would reject.
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
-        self._session = session or requests.Session()
+        retries = max_retries if max_retries is not None else int(os.environ.get("HTTP_MAX_RETRIES") or "3")
+        self._session = session or self._retrying_session(retries)
+
+    @staticmethod
+    def _retrying_session(max_retries: int) -> requests.Session:
+        retry = Retry(
+            total=max_retries,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+        )
+        session = requests.Session()
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        session.mount("http://", HTTPAdapter(max_retries=retry))
+        return session
 
     def _ok(self, url: str) -> bool:
         try:
@@ -206,8 +232,7 @@ class ProdPackageIndex:
             logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
             return 200 <= resp.status_code < 300
         except requests.RequestException as exc:
-            logger.warning("GET %s failed: %s", url, exc)
-            return False
+            raise ProbeError(f"GET {url} failed: {exc}") from exc
 
     def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None:
         """Return the first ``candidates`` version whose prod pocket exists (200).
@@ -230,8 +255,7 @@ class ProdPackageIndex:
         try:
             resp = self._session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
-            logger.warning("GET %s failed: %s", url, exc)
-            return []
+            raise ProbeError(f"GET {url} failed: {exc}") from exc
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
             return []

@@ -27,6 +27,10 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# Marks a verdict as VM-tested, so Phase 2 leaves it alone instead of
+# re-provisioning the distro on every run.
+LISA_VERDICT = "lisa"
+
 
 # ---------------------------------------------------------------------------
 # Job model (one entry per distro handed over from Phase 2 / fed to LISA)
@@ -99,6 +103,7 @@ def _ensure_phase3_columns(conn: sqlite3.Connection) -> None:
         "ALTER TABLE images ADD COLUMN last_validated_version TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE images ADD COLUMN last_regressed_version TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE images ADD COLUMN last_validated_image_version TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE images ADD COLUMN verdict_source TEXT NOT NULL DEFAULT ''",
     ):
         try:
             conn.execute(ddl)
@@ -133,8 +138,9 @@ def _record_validation(
     conn = sqlite3.connect(config.DB_PATH)
     try:
         _ensure_phase3_columns(conn)
-        set_cols = ["validated = ?", "last_validated = ?", "last_modified = ?", "reason = ?"]
-        params: list = [validated, now, now, reason]
+        set_cols = ["validated = ?", "last_validated = ?", "last_modified = ?", "reason = ?",
+                    "verdict_source = ?"]
+        params: list = [validated, now, now, reason, LISA_VERDICT]
         if last_validated_version is not None:
             set_cols.append("last_validated_version = ?")
             params.append(last_validated_version)

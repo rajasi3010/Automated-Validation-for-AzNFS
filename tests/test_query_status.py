@@ -27,8 +27,10 @@ def _db(tmp_path) -> str:
 def test_buckets_match_the_monthly_digest_rollup(tmp_path):
     buckets = query_status.load_buckets(_db(tmp_path))
 
+    # Ubuntu 24.04 has a validated SKU and an unvalidated one; the distro is
+    # reported once, under the strongest evidence.
     assert [d["distro_label"] for d in buckets["known_supported"]] == ["Ubuntu 24.04"]
-    assert [d["distro_label"] for d in buckets["unknown"]] == ["Ubuntu 24.04"]
+    assert buckets["unknown"] == []
     unsupported = buckets["known_unsupported"]
     assert [d["distro_label"] for d in unsupported] == ["Debian 11"]  # CentOS excluded
     assert unsupported[0]["reason"] == "prod repo is missing"

@@ -129,14 +129,17 @@ class FakeNotifierMod:
 
 
 class FakeDbMod:
-    def __init__(self, matched=True, records=None, pending=None, supported=None):
+    def __init__(self, matched=True, records=None, pending=None, supported=None,
+                 unsupported=None):
         self.calls = []
         self.matched = matched
         self.records = records or {}     # identity tuple -> row dict
         self.pending = pending or []     # rows currently pending_publish
         self.supported = supported or [] # rows currently known_supported
+        self.unsupported = unsupported or []  # rows currently known_unsupported
 
-    def set_validation_state(self, db_path, identity, state, last_validated_version=None, reason=None):
+    def set_validation_state(self, db_path, identity, state, last_validated_version=None,
+                             reason=None, verdict_source=None):
         self.calls.append((db_path, identity, state, last_validated_version))
         return self.matched
 
@@ -148,6 +151,8 @@ class FakeDbMod:
             return list(self.pending)
         if state == "known_supported":
             return list(self.supported)
+        if state == "known_unsupported":
+            return list(self.unsupported)
         return []
 
 
@@ -354,26 +359,29 @@ def _ident(e):
     return (e["publisher"], e["image"], e["sku"], e["region"], e["architecture"])
 
 
-def test_enrich_skips_in_flight_and_unsupported_but_rechecks_supported():
+def test_enrich_skips_in_flight_and_lisa_verdicts_but_rechecks_the_rest():
     # A reused Phase 1 artifact still lists images Phase 2 already handled. The DB
-    # state is authoritative: in-flight (pending_validation) and terminal
-    # (known_unsupported) images are NOT re-dispatched. known_supported is NO
-    # longer skipped -- it flows on (tagged _db_state) so Gate 3 can re-check the
-    # prod AzNFS version and re-validate on a newer package.
+    # state is authoritative: in-flight (pending_validation) images are NOT
+    # re-dispatched, and neither are known_unsupported rows a Phase 3 VM run
+    # decided. known_supported flows on (tagged _db_state) so Gate 3 can re-check
+    # the prod AzNFS version, and so does a known_unsupported row Phase 2 decided
+    # itself -- that verdict is just a repo/package lookup and goes stale.
     e_inflight = _entry(sku="inflight")
     e_supported = _entry(sku="supported")
-    e_unsupported = _entry(sku="unsupported")
+    e_gate = _entry(sku="gate-unsupported")
+    e_lisa = _entry(sku="lisa-unsupported")
     e_fresh = _entry(sku="fresh")
     db = FakeDbMod(records={
         _ident(e_inflight): {"validated": "pending_validation"},
         _ident(e_supported): {"validated": "known_supported", "last_validated_version": "0.3.458"},
-        _ident(e_unsupported): {"validated": "known_unsupported"},
+        _ident(e_gate): {"validated": "known_unsupported", "verdict_source": "gate"},
+        _ident(e_lisa): {"validated": "known_unsupported", "verdict_source": "lisa"},
         _ident(e_fresh): {"validated": "unknown"},
     })
 
-    out = run.enrich_and_merge([e_inflight, e_supported, e_unsupported, e_fresh], db, "db")
+    out = run.enrich_and_merge([e_inflight, e_supported, e_gate, e_lisa, e_fresh], db, "db")
 
-    assert [r["sku"] for r in out] == ["supported", "fresh"]
+    assert [r["sku"] for r in out] == ["supported", "gate-unsupported", "fresh"]
     supported = next(r for r in out if r["sku"] == "supported")
     assert supported["_db_state"] == "known_supported"
     assert supported["last_validated_version"] == "0.3.458"
@@ -484,3 +492,38 @@ def test_run_end_to_end_trusted(tmp_path):
     # ...but a trusted-only run is NOT actionable, so no summary e-mail is sent
     # (the daily known_supported re-check would otherwise mail every run).
     assert notifier_mod.summaries == []
+
+
+def _db_row(sku, label="Ubuntu 24.04", source="", version="24.04.1"):
+    return {"publisher": "Canonical", "image": "ubuntu-24_04-lts", "sku": sku,
+            "region": "eastus", "architecture": "x86_64", "family": "apt",
+            "distro_label": label, "version": version, "verdict_source": source}
+
+
+def test_gate_unsupported_rows_are_refed_for_recheck():
+    # A "prod repo is missing" verdict is only a lookup: it must be re-checked so
+    # a distro that gained AzNFS support (or was hit by an unreachable PMC) heals.
+    db = FakeDbMod(unsupported=[_db_row("server", source="gate")])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert [r["sku"] for r in out] == ["server"]
+    assert out[0]["_db_state"] == "known_unsupported"
+
+
+def test_lisa_unsupported_rows_are_not_refed():
+    # The suite really failed on a VM -- re-feeding would re-provision it daily.
+    db = FakeDbMod(unsupported=[_db_row("server", source="lisa")])
+
+    assert run.enrich_and_merge([], db, "db") == []
+
+
+def test_unsupported_refeed_keeps_one_rep_per_distro_and_arch():
+    db = FakeDbMod(unsupported=[
+        _db_row("server", version="24.04.1"),
+        _db_row("minimal", version="24.04.9"),
+    ])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert [r["sku"] for r in out] == ["minimal"]  # newest marketplace version wins

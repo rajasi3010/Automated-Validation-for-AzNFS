@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from src.phase2 import pmc_packages
 from src.phase2.orchestrator import (
     KNOWN_SUPPORTED,
     KNOWN_UNSUPPORTED,
@@ -40,9 +41,11 @@ class FakeProd:
 @dataclass
 class FakeDb:
     updates: list[tuple] = field(default_factory=list)
+    sources: list = field(default_factory=list)
 
-    def set_validation_state(self, identity, state, reason=None):
+    def set_validation_state(self, identity, state, reason=None, verdict_source=None):
         self.updates.append((identity, state, reason))
+        self.sources.append(verdict_source)
 
 
 @dataclass
@@ -639,3 +642,33 @@ def test_run_phase2_dedups_jobs_by_url_keeping_latest_version(tmp_path):
     assert any(j["aznfs_package_url"].endswith("/rocky/9/prod/Packages/a/aznfs-0.3.458-1.x86_64.rpm") for j in jobs)
     # The summary's to_phase3 table mirrors the deduped jobs (one row per url).
     assert len(notifier.summaries[-1]["to_phase3"]) == 4
+
+
+def test_phase2_tags_its_verdicts_as_gate_decisions():
+    # The tag is what lets a later run re-check this cheap lookup instead of
+    # treating it as a permanent verdict.
+    prod = FakeProd(repos={}, packages={})
+    db = FakeDb()
+
+    r = process_entry(entry(distro_label="Ubuntu 24.04"), prod, db)
+
+    assert r.outcome == "known_unsupported"
+    assert db.sources == ["gate"]
+
+
+def test_unreachable_pmc_records_no_verdict_and_is_reported_as_an_error(tmp_path):
+    class ExplodingProd:
+        def resolve_repo(self, distro, candidates, family=""):
+            raise pmc_packages.ProbeError("read timed out")
+
+        def list_packages(self, distro, version, family):  # pragma: no cover
+            raise AssertionError("not reached")
+
+    db, notifier = FakeDb(), FakeNotifier()
+
+    run_phase2([entry(distro_label="Ubuntu 24.04")], ExplodingProd(), db, notifier)
+
+    assert db.updates == []  # the stored verdict is left untouched
+    summary = notifier.summaries[-1]
+    assert summary["unsupported"] == []
+    assert "PMC unreachable" in summary["errors"][0][1]

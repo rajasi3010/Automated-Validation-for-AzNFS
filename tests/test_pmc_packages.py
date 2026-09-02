@@ -5,6 +5,7 @@ import requests
 
 from src.phase2.pmc_packages import (
     AZNFS_SERIES,
+    ProbeError,
     ProdPackageIndex,
     aznfs_dir_url,
     distro_segment,
@@ -240,3 +241,44 @@ def test_list_packages_404_returns_empty():
     sess = _FakeSession({})
     idx = ProdPackageIndex(base_url=BASE, session=sess)
     assert idx.list_packages("debian", "11", "apt") == []
+
+
+class _ExplodingSession:
+    """Every request dies the way a timeout / DNS blip does."""
+
+    def __init__(self):
+        self.requested = []
+
+    def get(self, url, timeout=None):
+        self.requested.append(url)
+        raise requests.ConnectionError("read timed out")
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_a_missing_repo():
+    # Returning "missing" here is what recorded permanent known_unsupported
+    # verdicts for distros whose repo existed all along.
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.resolve_repo("ubuntu", ["24.04"], "apt")
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_no_packages():
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.list_packages("ubuntu", "24.04", "apt")
+
+
+def test_http_404_still_means_genuinely_absent():
+    prod = ProdPackageIndex(session=_FakeSession({}))
+
+    assert prod.resolve_repo("ubuntu", ["24.04"], "apt") is None
+    assert prod.list_packages("ubuntu", "24.04", "apt") == []
+
+
+def test_default_session_retries_transient_failures():
+    retry = ProdPackageIndex()._session.get_adapter("https://").max_retries
+
+    assert retry.total == 3
+    assert 503 in retry.status_forcelist
