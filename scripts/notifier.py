@@ -349,11 +349,17 @@ def _summary_table_html(title: str, columns: list[tuple[str, str]], rows: list[d
         body = ""
         for i, r in enumerate(rows):
             bg = "#ffffff" if i % 2 == 0 else "#f6f8fa"
-            cells = "".join(
-                "<td style='padding:6px 10px;border-top:1px solid #e1e4e8;"
-                f"word-break:break-all'>{html.escape(str(r.get(k, '') or ''))}</td>"
-                for k, _ in columns
-            )
+            cells = ""
+            for key, _ in columns:
+                value = str(r.get(key, "") or "")
+                if key == "bug_url" and value:
+                    rendered = f"<a href='{html.escape(value, quote=True)}'>View Bug</a>"
+                else:
+                    rendered = html.escape(value)
+                cells += (
+                    "<td style='padding:6px 10px;border-top:1px solid #e1e4e8;"
+                    f"word-break:break-all'>{rendered}</td>"
+                )
             body += f"<tr style='background:{bg}'>{cells}</tr>"
     else:
         body = (
@@ -383,8 +389,8 @@ def send_phase2_summary(
     Each bucket is a list of small dicts (see ``orchestrator.NotifierLike``):
       * ``to_phase3``       -> {label, arch, url}
       * ``trusted``         -> {label, arch}
-      * ``pending_publish`` -> {label, arch, reason}
-      * ``unsupported``     -> {label, arch, reason}
+    * ``pending_publish`` -> {label, arch, reason, bug_url}
+    * ``unsupported``     -> {label, arch, reason, bug_url}
     ``arch`` is its own column so the same distro on x86_64 and arm64 reads as
     two clear rows rather than a confusing repeat.
     """
@@ -411,8 +417,8 @@ def send_phase2_summary(
         f"Phase 2 processed {processed} image(s).\n\n"
         f"a) Handed to Phase 3 ({len(to_phase3)}):\n{_plain(to_phase3, ['label', 'arch', 'url'])}\n\n"
         f"b) Already validated on prod, trusted ({len(trusted)}):\n{_plain(trusted, ['label', 'arch'])}\n\n"
-        f"c) Pending manual publish ({len(pending_publish)}):\n{_plain(pending_publish, ['label', 'arch', 'reason'])}\n\n"
-        f"d) Marked known_unsupported ({len(unsupported)}):\n{_plain(unsupported, ['label', 'arch', 'reason'])}"
+        f"c) Pending manual publish ({len(pending_publish)}):\n{_plain(pending_publish, ['label', 'arch', 'reason', 'bug_url'])}\n\n"
+        f"d) Marked known_unsupported ({len(unsupported)}):\n{_plain(unsupported, ['label', 'arch', 'reason', 'bug_url'])}"
         + (
             "\n\ne) Orchestrator errors (" + str(len(errors)) + "):\n"
             + "\n".join(f"  - {lbl}: {reason}" for lbl, reason in errors)
@@ -439,12 +445,12 @@ def send_phase2_summary(
         )
         + _summary_table_html(
             f"c) Pending manual publish ({len(pending_publish)})",
-            [("label", "Distro"), ("arch", "Arch"), ("reason", "Reason")],
+            [("label", "Distro"), ("arch", "Arch"), ("reason", "Reason"), ("bug_url", "Bug")],
             pending_publish,
         )
         + _summary_table_html(
             f"d) Marked known_unsupported ({len(unsupported)})",
-            [("label", "Distro"), ("arch", "Arch"), ("reason", "Reason")],
+            [("label", "Distro"), ("arch", "Arch"), ("reason", "Reason"), ("bug_url", "Bug")],
             unsupported,
         )
         + (

@@ -129,6 +129,13 @@ jobs:
           # days passed since the last validation. Repo variables are not exported
           # automatically, so it must be mapped here to be honoured.
           PHASE3_IMAGE_REVALIDATE_DAYS: ${{ vars.PHASE3_IMAGE_REVALIDATE_DAYS }}
+          # --- Azure DevOps Bugs for known_unsupported outcomes ---
+          AZDO_ORGANIZATION: msazure
+          AZDO_PROJECT: One
+          AZDO_AREA_PATH: 'One\Xstore\XSMB'
+          AZDO_ASSIGNED_TO: Shyam Prasad
+          AZDO_TAGS: AzNFS
+          AZDO_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}
           # --- Paths ---
           DB_PATH: marketplace.db
         run: |

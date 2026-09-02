@@ -62,6 +62,15 @@ class FakeNotifier:
         })
 
 
+@dataclass
+class FakeBugTracker:
+    calls: list[tuple] = field(default_factory=list)
+
+    def ensure_bug(self, label, arch, outcome, reason):
+        self.calls.append((label, arch, outcome, reason))
+        return f"https://dev.azure.com/msazure/One/_workitems/edit/{len(self.calls)}"
+
+
 def entry(**kw):
     base = {
         "publisher": "Canonical",
@@ -561,6 +570,31 @@ def test_run_phase2_buckets_writes_jobs_and_single_summary(tmp_path, monkeypatch
 
     written = json.loads(out.read_text())
     assert written[0]["aznfs_package_url"].endswith("aznfs_0.3.2_amd64.deb")
+
+
+def test_run_phase2_creates_deduped_bugs_and_adds_mail_links(monkeypatch):
+    monkeypatch.setattr(
+        "src.phase2.orchestrator._packages_csv_mentions_distro", lambda label: True
+    )
+    prod = FakeProd(repos={"rhel": {"9"}, "debian": {"11"}}, packages={})
+    db, notifier, bugs = FakeDb(), FakeNotifier(), FakeBugTracker()
+    entries = [
+        entry(publisher="RedHat", distro_label="RHEL 9", family="yum",
+              image="RHEL", sku="9-a"),
+        entry(publisher="RedHat", distro_label="RHEL 9", family="yum",
+              image="RHEL", sku="9-b"),
+        entry(publisher="Debian", distro_label="Debian 11", image="debian", sku="11"),
+    ]
+
+    run_phase2(entries, prod, db, notifier, bug_tracker=bugs)
+
+    assert [(call[0], call[2]) for call in bugs.calls] == [
+        ("RHEL 9", "pending_publish"),
+        ("Debian 11", "known_unsupported"),
+    ]
+    summary = notifier.summaries[-1]
+    assert summary["pending_publish"][0]["bug_url"].endswith("/1")
+    assert summary["unsupported"][0]["bug_url"].endswith("/2")
 
 
 def test_run_phase2_swallows_per_entry_errors_into_summary():
