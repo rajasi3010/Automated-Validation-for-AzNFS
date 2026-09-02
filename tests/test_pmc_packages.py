@@ -67,6 +67,11 @@ APT_HTML_WITH_AZNFS = """
 <a href="aznfs_0.3.2_arm64.deb">aznfs_0.3.2_arm64.deb</a>
 """
 
+APT_HTML_NON_SEQUENTIAL_VERSIONS = """
+<a href="aznfs_0.3.458_amd64.deb">aznfs_0.3.458_amd64.deb</a> 25-May-2026 06:06 9.4 MB
+<a href="aznfs_0.3.48_amd64.deb">aznfs_0.3.48_amd64.deb</a> 25-Aug-2026 08:44 9.4 MB
+"""
+
 
 # ---------------------------------------------------------------------------
 # distro_label / publisher -> PMC segment + index kind
@@ -233,6 +238,16 @@ def test_list_packages_apt_returns_debs():
         "aznfs_0.3.2_amd64.deb",
         "aznfs_0.3.2_arm64.deb",
     ]
+
+
+def test_latest_package_uses_publication_time_not_numeric_version():
+    url = aznfs_dir_url("ubuntu", "24.04", "apt", BASE)
+    sess = _FakeSession({url: _Resp(APT_HTML_NON_SEQUENTIAL_VERSIONS)})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+    packages = idx.list_packages("ubuntu", "24.04", "apt")
+
+    assert idx.latest_package("ubuntu", "24.04", "apt", packages) == \
+        "aznfs_0.3.48_amd64.deb"
 
 
 def test_list_packages_404_returns_empty():

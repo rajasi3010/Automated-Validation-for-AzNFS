@@ -8,9 +8,9 @@ over by Phase 1 the orchestrator walks three checks built straight on the public
               no  -> DB known_unsupported  (reason: "repo is missing")
     Gate 2  package exists?   the aznfs dir lists a 0.3.x build for this arch
               no  -> DB known_unsupported  (email flags pending_publish: publish manually)
-    Gate 3  validation needed?  numeric-latest 0.3.x prod version p  vs  DB last_validated_version
+    Gate 3  validation needed?  latest-published 0.3.x package p vs DB last_validated_version
               no  (p == v_last) -> DB known_supported  (trusted)
-              yes (first time, or p > v_last) -> emit LISA job; DB state UNCHANGED (Phase 3 sets it)
+              yes (first time, or p changed) -> emit LISA job; DB state UNCHANGED (Phase 3 sets it)
 
 Phase 2 sends EXACTLY ONE e-mail per run: the end-of-run summary, which lists
 every distro and -- for the failing ones -- the reason. No per-distro mail is
@@ -271,7 +271,9 @@ def _image_needs_revalidation(entry: dict) -> bool:
     if not last:
         return True  # image changed and no timestamp -> allow
     try:
-        dt = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return True  # unparseable timestamp -> allow
     return datetime.now(timezone.utc) - dt >= timedelta(days=days)
@@ -369,15 +371,21 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     logger.info("[%s] Gate 2 PASS -> %d %s.x package(s) published for arch=%s",
                 label or "?", len(arch_files), pmc_packages.AZNFS_SERIES, want_arch)
 
-    # Gate 3: validation needed? Numeric-latest 0.3.x prod version vs what Phase 3 last validated.
-    best = max(arch_files, key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)))
+    # Gate 3: the real PMC client selects by publication time. Injected legacy
+    # clients and test fakes retain numeric ordering as a compatibility fallback.
+    latest_package = getattr(prod, "latest_package", None)
+    if callable(latest_package):
+        best = latest_package(distro, version, family, arch_files)
+    else:
+        best = max(
+            arch_files,
+            key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)),
+        )
     p = pmc_packages.version_from_filename(best)
     v_last = (entry.get("last_validated_version") or "").strip()
     v_regressed = (entry.get("last_regressed_version") or "").strip()
 
-    is_newer = (not v_last) or (
-        pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
-    )
+    package_changed = (not v_last) or p != v_last
     # A version already known to regress on THIS supported distro is NOT re-tested
     # (it would just fail + re-alert every run); a strictly newer package supersedes
     # the marker and IS validated -> auto-recovery. Gate this on the supported state
@@ -389,7 +397,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     # Even when the package is unchanged, re-validate a supported distro whose
     # marketplace IMAGE has drifted (rate-limited) so OS rebuilds get re-checked.
     image_drift = _image_needs_revalidation(entry)
-    if known_bad or (not is_newer and not image_drift):
+    if known_bad or (not package_changed and not image_drift):
         cur_img = (entry.get("version") or "").strip()
         v_img_last = (entry.get("last_validated_image_version") or "").strip()
         if known_bad:
@@ -409,8 +417,8 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     # on its verdict. Only 3 states ever persist.
     if not v_last:
         detail = "first validation"
-    elif is_newer:
-        detail = f"newer than last-validated v{v_last}"
+    elif package_changed:
+        detail = f"published package changed v{v_last} -> v{p}"
     else:
         detail = f"image drift (pkg v{p} unchanged, new image {entry.get('version')})"
     logger.info("[%s] Gate 3: %s -> emit LISA job (hand off to Phase 3)", label or "?", detail)

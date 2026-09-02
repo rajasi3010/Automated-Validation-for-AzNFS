@@ -296,11 +296,14 @@ they appear only as labels in the summary e-mail.
    - the distro **is** supported but is **missing** from `packages.csv` — e-mail
      reason *team must update the csv, push a branch, and re-invoke Phase 2 with
      that branch*.
-3. **Gate 3 — validation needed?** The latest `0.3.x` prod version is compared
-   (numerically) against what Phase 3 last validated. Already-validated ⇒ stored
-   `known_supported` (the e-mail calls it *trusted*); first time or newer ⇒ a
-   LISA job is emitted and the DB row is left `unknown` (the e-mail lists it as
-   handed to Phase 3), so Phase 3 records the final verdict.
+3. **Gate 3 — validation needed?** The most recently published `0.3.x` package,
+  based on the PMC directory timestamp, is compared with what Phase 3 last
+  validated. Already validated ⇒ stored `known_supported` (the e-mail calls it
+  *trusted*); first time or changed package ⇒ a LISA job is emitted and the DB
+  row is left `unknown` (the e-mail lists it as handed to Phase 3), so Phase 3
+  records the final verdict. Publication time is intentional because PMC can
+  publish a numerically lower package later (for example, `0.3.48` after
+  `0.3.458`).
 
 The **AzNFS-supported distros** are: Ubuntu 18.04 / 20.04 / 22.04 / 24.04 / 26.04;
 RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.

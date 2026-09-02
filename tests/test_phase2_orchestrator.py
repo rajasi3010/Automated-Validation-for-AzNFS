@@ -230,6 +230,21 @@ def test_recheck_known_supported_newer_package_revalidates():
     assert db.updates == []  # LISA path leaves state unchanged
 
 
+def test_recheck_known_supported_changed_lower_number_revalidates():
+    prod = FakeProd(
+        repos={"ubuntu": {"22.04"}},
+        packages={("ubuntu", "22.04"): ["aznfs_0.3.48_amd64.deb"]},
+    )
+    db = FakeDb()
+
+    r = process_entry(
+        entry(_db_state="known_supported", last_validated_version="0.3.458"), prod, db
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.48"
+
+
 def test_recheck_known_supported_same_package_stays_trusted():
     prod = FakeProd(
         repos={"ubuntu": {"22.04"}},
