@@ -11,7 +11,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 jobs:
   watchdog:
@@ -30,6 +30,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Read-only: the watchdog never writes the DB, it only needs it to
+      # regenerate the status page below.
+      - name: Restore database cache
+        uses: actions/cache/restore@v4
+        with:
+          path: marketplace.db
+          key: marketplace-db-v2-${{ github.run_id }}
+          restore-keys: |
+            marketplace-db-v2-
+
       - name: Check phase hand-offs
         env:
           PYTHONPATH: scripts
@@ -43,3 +53,9 @@ jobs:
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
         run: python scripts/chain_watchdog.py
+
+      # Daily heartbeat for the status page: Phase 3 is skipped when Phase 2
+      # fails, so without this the page could silently go stale for days.
+      - name: Publish STATUS.md
+        if: always()
+        run: bash .github/scripts/publish_status.sh

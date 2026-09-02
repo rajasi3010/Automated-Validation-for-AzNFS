@@ -5,6 +5,8 @@ All tuneable values live here; secrets come from environment variables.
 
 import os
 
+import status_rollup
+
 # ---------------------------------------------------------------------------
 # Azure regions to scan
 # ---------------------------------------------------------------------------
@@ -58,11 +60,7 @@ EXCLUDED_OFFER_SUBSTRINGS: list[str] = [
 # them already exist in the cached DB (or get reset to 'unknown'). CentOS is
 # excluded because it is EOL (its in-image yum mirrors are gone). Override with
 # EXCLUDED_DISTRO_PREFIXES (comma-separated) if needed.
-EXCLUDED_DISTRO_PREFIXES: list[str] = [
-    s.strip().lower()
-    for s in os.environ.get("EXCLUDED_DISTRO_PREFIXES", "centos").split(",")
-    if s.strip()
-]
+EXCLUDED_DISTRO_PREFIXES: list[str] = status_rollup.prefixes_from_env()
 
 
 
