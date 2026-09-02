@@ -22,6 +22,7 @@ import functools
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -38,6 +39,11 @@ _MAP_PATH = Path(__file__).with_name("distro_map.yaml")
 
 # Hyperlinks in a directory autoindex page, e.g. href="aznfs_0.3.2_amd64.deb".
 _HREF_RE = re.compile(r"""href=["']([^"'?]+)["']""", re.IGNORECASE)
+_INDEX_ENTRY_RE = re.compile(
+    r"""href=["']([^"'?]+)["'][^>]*>.*?</a>\s+"""
+    r"(\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2})",
+    re.IGNORECASE,
+)
 _AZNFS_VERSION_RE = re.compile(r"aznfs[_-]v?([0-9]+(?:\.[0-9]+)*)")
 _VER_RE = re.compile(r"(\d+)(?:\.(\d+))?")
 
@@ -199,6 +205,7 @@ class ProdPackageIndex:
         # (an unset repo variable arrives as ''), which int('') would reject.
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         self._session = session or requests.Session()
+        self._published_at: dict[tuple[str, str], datetime] = {}
 
     def _ok(self, url: str) -> bool:
         try:
@@ -238,6 +245,14 @@ class ProdPackageIndex:
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
         names: list[str] = []
+        for href, published_at in _INDEX_ENTRY_RE.findall(resp.text):
+            name = href.split("/")[-1].split("?")[0]
+            try:
+                self._published_at[(url, name)] = datetime.strptime(
+                    published_at, "%d-%b-%Y %H:%M"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                logger.debug("Ignoring unparseable PMC timestamp %r for %s", published_at, name)
         for href in _HREF_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             if name.lower().startswith("aznfs") and name.lower().endswith(ext):
@@ -245,6 +260,32 @@ class ProdPackageIndex:
         logger.debug("Gate 2 listing: GET %s -> HTTP %s, %d aznfs%s file(s)",
                      url, resp.status_code, len(names), ext)
         return names
+
+    def latest_package(
+        self,
+        distro: str,
+        version: str,
+        family: str,
+        filenames: list[str],
+    ) -> str:
+        """Return the most recently published package from a prior listing.
+
+        PMC package versions are not publication-sequential: for example,
+        0.3.48 was published after 0.3.458. Use the autoindex timestamp as the
+        primary ordering and retain numeric version ordering as a deterministic
+        fallback for indexes that omit timestamps.
+        """
+        if not filenames:
+            raise ValueError("filenames must not be empty")
+        url = aznfs_dir_url(distro, version, family, self.base_url)
+        unknown = datetime.min.replace(tzinfo=timezone.utc)
+        return max(
+            filenames,
+            key=lambda name: (
+                self._published_at.get((url, name), unknown),
+                version_tuple(version_from_filename(name)),
+            ),
+        )
 
     def ping(self) -> bool:
         """Lightweight reachability probe (used by pre-flight if wired)."""
