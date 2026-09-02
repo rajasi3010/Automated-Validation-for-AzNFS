@@ -27,7 +27,7 @@ import logging
 import os
 from typing import Any
 
-from . import orchestrator, pmc_packages
+from . import orchestrator, pmc_packages, work_items
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +303,7 @@ def run(
     prod: Any | None = None,
     notifier_obj: Any | None = None,
     db: Any | None = None,
+    bug_tracker: Any | None = None,
     lisa_jobs_path: str | None = None,
 ) -> list[dict]:
     """Wire the live prod client (or injected fakes) and run Phase 2.
@@ -327,6 +328,8 @@ def run(
     if prod is None:
         logger.info("Using PMC prod content server %s", pmc_packages.PROD_BASE)
         prod = pmc_packages.from_env()
+    if bug_tracker is None:
+        bug_tracker = work_items.from_env("Phase 2")
 
     jobs = orchestrator.run_phase2(
         entries=entries,
@@ -334,6 +337,7 @@ def run(
         db=db,
         notifier=notifier_obj,
         lisa_jobs_path=lisa_jobs_path,
+        bug_tracker=bug_tracker,
     )
     logger.info("Phase 2 complete: %d LISA job(s) -> %s", len(jobs), lisa_jobs_path)
     return jobs

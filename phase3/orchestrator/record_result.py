@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 from . import config
+from src.phase2 import work_items
 
 logger = logging.getLogger(__name__)
 
@@ -221,11 +222,17 @@ def _table_html(title: str, columns: List[Tuple[str, str]], rows: List[Dict[str,
         body = ""
         for i, r in enumerate(rows):
             bg = "#ffffff" if i % 2 == 0 else "#f6f8fa"
-            cells = "".join(
-                "<td style='padding:6px 10px;border-top:1px solid #e1e4e8;"
-                f"word-break:break-all'>{_html.escape(str(r.get(k, '') or ''))}</td>"
-                for k, _ in columns
-            )
+            cells = ""
+            for key, _ in columns:
+                value = str(r.get(key, "") or "")
+                if key == "bug_url" and value:
+                    rendered = f"<a href='{_html.escape(value, quote=True)}'>View Bug</a>"
+                else:
+                    rendered = _html.escape(value)
+                cells += (
+                    "<td style='padding:6px 10px;border-top:1px solid #e1e4e8;"
+                    f"word-break:break-all'>{rendered}</td>"
+                )
             body += f"<tr style='background:{bg}'>{cells}</tr>"
     else:
         body = (
@@ -267,7 +274,7 @@ def _send_summary(
         f"a) Validation successful (known_supported) ({len(supported)}):\n"
         f"{_plain(supported, ['label', 'arch'])}\n\n"
         f"b) Validation fails (kept in known_unsupported) ({len(unsupported)}):\n"
-        f"{_plain(unsupported, ['label', 'arch', 'urn', 'logs_url', 'reason'])}\n\n"
+        f"{_plain(unsupported, ['label', 'arch', 'urn', 'logs_url', 'reason', 'bug_url'])}\n\n"
         f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)}):\n"
         f"{_plain(regressions, ['label', 'arch', 'urn', 'logs_url', 'reason'])}"
     )
@@ -290,6 +297,7 @@ def _send_summary(
                 ("urn", "Image URN"),
                 ("logs_url", "Logs URL"),
                 ("reason", "Reason"),
+                ("bug_url", "Bug"),
             ],
             unsupported,
         )
@@ -364,7 +372,7 @@ def process_job(job: LisaJob) -> Tuple[str, str]:
     return "known_unsupported", job.failure_reason
 
 
-def run(jobs: List[LisaJob]) -> Dict[str, int]:
+def run(jobs: List[LisaJob], bug_tracker=None) -> Dict[str, int]:
     """Record every job's verdict and send ONE summary e-mail. Returns counts."""
     # Like Phase 1 (silent when no new distro is found), stay silent when there
     # is nothing to validate: no jobs means no verdicts, so skip the e-mail.
@@ -397,6 +405,22 @@ def run(jobs: List[LisaJob]) -> Dict[str, int]:
                     "reason": reason or "validation failed",
                 }
             )
+    if bug_tracker is None:
+        bug_tracker = work_items.from_env("Phase 3")
+    if bug_tracker:
+        for row in unsupported:
+            try:
+                bug_reason = (
+                    f"{row['reason']}; image URN: {row['urn']}; logs: {row['logs_url']}"
+                )
+                row["bug_url"] = bug_tracker.ensure_bug(
+                    row["label"], row["arch"], "known_unsupported", bug_reason
+                )
+            except Exception:
+                logger.exception(
+                    "Could not create Azure DevOps Bug for %s (%s)",
+                    row["label"], row["arch"],
+                )
     _send_summary(len(jobs), supported, unsupported, regressions)
     logger.info(
         "Phase 3: %d supported, %d unsupported, %d regressed (of %d)",

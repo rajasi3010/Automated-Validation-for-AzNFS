@@ -118,3 +118,23 @@ def test_monthly_reminder_reason_column_for_unsupported_only(notifier):
     assert html_body.count(">Reason<") == 1
     assert "prod repo is missing" in html_body
     assert "prod repo is missing" in plain
+
+
+def test_phase2_summary_links_unsupported_bug(notifier):
+    mod, email_client_cls = notifier
+    instance = email_client_cls.return_value
+    instance.begin_send.return_value.result.return_value = mock.Mock(id="msg-bug")
+    bug_url = "https://dev.azure.com/msazure/One/_workitems/edit/1234"
+
+    mod.send_phase2_summary(
+        processed=1,
+        unsupported=[{
+            "label": "Ubuntu 24.04", "arch": "arm64",
+            "reason": "validation failed", "bug_url": bug_url,
+        }],
+    )
+
+    msg = instance.begin_send.call_args[0][0]
+    assert f"href='{bug_url}'" in msg["content"]["html"]
+    assert "View Bug" in msg["content"]["html"]
+    assert bug_url in msg["content"]["plainText"]

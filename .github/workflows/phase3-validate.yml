@@ -122,6 +122,13 @@ jobs:
           ACS_ENDPOINT: ${{ vars.ACS_ENDPOINT }}
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
+          # --- Azure DevOps Bugs for true known_unsupported verdicts ---
+          AZDO_ORGANIZATION: msazure
+          AZDO_PROJECT: One
+          AZDO_AREA_PATH: 'One\Xstore\XSMB'
+          AZDO_ASSIGNED_TO: Shyam Prasad
+          AZDO_TAGS: AzNFS
+          AZDO_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}
           # --- Shared DB ---
           DB_PATH: marketplace.db
           # --- LISA parallelism (bounded by the subscription's regional vCPU quota) ---

@@ -317,6 +317,41 @@ def test_run_sends_single_summary_with_reasons(tmp_path, monkeypatch):
     assert "suse:sles:15-sp5" in body
 
 
+def test_run_creates_bug_for_known_unsupported_and_links_summary(monkeypatch):
+    captured = {}
+
+    class BugTracker:
+        def ensure_bug(self, label, arch, outcome, reason):
+            captured["bug_call"] = (label, arch, outcome, reason)
+            return "https://dev.azure.com/msazure/One/_workitems/edit/42"
+
+    monkeypatch.setattr(
+        record_result,
+        "process_job",
+        lambda job: ("known_unsupported", "[Tier 4: mount] failed"),
+    )
+    monkeypatch.setattr(
+        record_result,
+        "_send_summary",
+        lambda processed, supported, unsupported, regressions: captured.update(
+            unsupported=unsupported
+        ),
+    )
+    job = record_result.LisaJob(
+        publisher="canonical", image="ubuntu", sku="server", version="24.04",
+        region="eastus", arch="arm64", distro_label="Ubuntu 24.04",
+        aznfs_version="0.3.48", lisa_passed=False,
+    )
+
+    record_result.run([job], bug_tracker=BugTracker())
+
+    assert captured["bug_call"][:3] == (
+        "Ubuntu 24.04", "arm64", "known_unsupported"
+    )
+    assert "image URN: canonical:ubuntu:server:24.04" in captured["bug_call"][3]
+    assert captured["unsupported"][0]["bug_url"].endswith("/42")
+
+
 def test_run_no_jobs_sends_no_email(monkeypatch):
     # Like Phase 1 (silent with no new distros), Phase 3 must NOT e-mail when
     # there is nothing to validate.

@@ -78,6 +78,10 @@ class NotifierLike(Protocol):
     ) -> None: ...
 
 
+class BugTrackerLike(Protocol):
+    def ensure_bug(self, label: str, arch: str, outcome: str, reason: str) -> str: ...
+
+
 @dataclass
 class Phase2Result:
     outcome: str  # known_unsupported | pending_publish | trusted | to_phase3
@@ -466,6 +470,7 @@ def run_phase2(
     db: DbLike,
     notifier: NotifierLike,
     lisa_jobs_path: str | None = None,
+    bug_tracker: BugTrackerLike | None = None,
 ) -> list[dict]:
     """Process every image, write the Phase 3 hand-off, and send the single summary.
 
@@ -507,6 +512,20 @@ def run_phase2(
     trusted = _dedup_label_arch(trusted)
     pending_publish = _dedup_label_arch(pending_publish)
     unsupported = _dedup_label_arch(unsupported)
+
+    if bug_tracker:
+        for outcome, rows in (("pending_publish", pending_publish), ("known_unsupported", unsupported)):
+            for row in rows:
+                try:
+                    row["bug_url"] = bug_tracker.ensure_bug(
+                        row.get("label", ""),
+                        row.get("arch", ""),
+                        outcome,
+                        row.get("reason", ""),
+                    )
+                except Exception as exc:
+                    logger.exception("Could not create Azure DevOps Bug for %s (%s)", row.get("label"), row.get("arch"))
+                    errors.append((row.get("label", "?"), f"Azure DevOps Bug creation failed: {exc}"))
 
     if lisa_jobs_path:
         write_lisa_jobs(lisa_jobs, lisa_jobs_path)
