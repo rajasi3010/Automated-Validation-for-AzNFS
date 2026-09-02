@@ -31,6 +31,9 @@ jobs:
       - azure-vm-marketplace
 
     permissions:
+      # A job-level block replaces the defaults, so actions:read must be listed
+      # or the Phase 2 artifact download loses access.
+      actions: read
       contents: write
 
     steps:
