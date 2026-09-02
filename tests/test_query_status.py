@@ -71,3 +71,33 @@ def test_text_output_lists_counts_and_reasons(tmp_path):
 def test_main_reports_missing_database(tmp_path, capsys):
     assert query_status.main(["--db", str(tmp_path / "nope.db")]) == 2
     assert "Database not found" in capsys.readouterr().err
+
+
+def test_reasons_are_redacted_before_they_reach_the_published_page(tmp_path):
+    # Phase 3 copies Azure errors verbatim into `reason`; STATUS.md is readable
+    # by anyone, so subscription/principal identifiers must not survive.
+    db = str(tmp_path / "m.db")
+    db_manager.initialize(db, "db/schema.sql")
+    ident = ("resf", "rockylinux-aarch64", "8", "eastus", "arm64")
+    db_manager.check_and_upsert(db, *ident[:3], "8.1", ident[3], ident[4], "yum", "Rocky 8")
+    db_manager.set_validation_state(
+        db, ident, "known_unsupported",
+        reason=("deployment failed: client 'ea2ea2c0-c588-498a-984e-a12e390743b5' with "
+                "object id 'd9e60338-84b5-4168-ac3b-f39bf22470a3' cannot act over scope "
+                "'/subscriptions/8ffe006d-4aa2-4eb6-bc3c-f33092ef804a/providers/x'"),
+    )
+
+    reason = query_status.load_buckets(db)["known_unsupported"][0]["reason"]
+
+    assert "ea2ea2c0" not in reason
+    assert "d9e60338" not in reason
+    assert "8ffe006d" not in reason
+    assert "deployment failed" in reason  # the useful part survives
+
+
+def test_markdown_is_deterministic_so_the_page_only_changes_with_the_data(tmp_path):
+    # A baked-in timestamp would rewrite STATUS.md on every run and bury real
+    # changes under commit churn.
+    buckets = query_status.load_buckets(_db(tmp_path))
+
+    assert query_status.render_markdown(buckets) == query_status.render_markdown(buckets)

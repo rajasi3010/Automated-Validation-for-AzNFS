@@ -20,7 +20,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 
 import db_manager
 import status_rollup
@@ -129,7 +128,6 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
 def render_markdown(buckets: dict[str, list[dict]]) -> str:
     total_distros = sum(len(rows) for rows in buckets.values())
     total_skus = sum(row.get("sku_count", 0) for rows in buckets.values() for row in rows)
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     counts = " | ".join(
         f"**{_TITLES.get(state, state)}:** {len(rows)}" for state, rows in buckets.items()
     )
@@ -140,7 +138,10 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         "",
         counts,
         "",
-        f"_Generated automatically from the validation database on {generated}. "
+        # Deliberately no timestamp: it would change every run and commit churn
+        # would hide the real changes. The commit date is the freshness marker.
+        "_Generated automatically from the validation database by the AzNFS "
+        "pipeline; the commit date shows when it was last refreshed. "
         "Do not edit by hand._",
         "",
     ]

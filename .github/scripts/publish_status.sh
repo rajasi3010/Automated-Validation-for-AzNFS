@@ -35,6 +35,9 @@ for attempt in 1 2 3; do
     echo "Published STATUS.md to $BRANCH."
     exit 0
   fi
+  # A conflicted pull leaves a rebase in progress, which would make every
+  # later attempt fail immediately instead of retrying the push race.
+  git rebase --abort 2>/dev/null || true
   echo "Push attempt $attempt failed; retrying."
 done
 

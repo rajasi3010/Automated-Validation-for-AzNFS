@@ -5,8 +5,27 @@ Azure credentials.
 """
 
 import os
+import re
 
 _DEFAULT_EXCLUDED_PREFIXES = "centos"
+
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I
+)
+# ARM paths keep their shape so the reason still reads sensibly.
+_ARM_SCOPE_RE = re.compile(r"/subscriptions/[^\s'\"]*", re.I)
+
+
+def redact(text: str) -> str:
+    """Strip subscription/principal identifiers out of a verdict reason.
+
+    Reasons are copied verbatim from Azure errors and end up on a page anyone
+    can read, so drop the operational identifiers and keep the failure itself.
+    """
+    if not text:
+        return ""
+    cleaned = _ARM_SCOPE_RE.sub("<scope redacted>", text)
+    return _UUID_RE.sub("<id redacted>", cleaned)
 
 
 def prefixes_from_env() -> list[str]:
@@ -70,7 +89,7 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
         if img.get("version", "") > g["version"]:
             g["version"] = img["version"]
         # Collect the distinct verdict reasons -- only meaningful for unsupported.
-        r = (img.get("reason") or "").strip()
+        r = redact((img.get("reason") or "").strip())
         if state == "known_unsupported" and r:
             g["reasons"].add(r)
         g["sku_count"] += 1
