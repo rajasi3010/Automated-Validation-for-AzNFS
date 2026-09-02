@@ -1,8 +1,8 @@
 # AzNFS validation status
 
-91 distro release(s) across 847 marketplace SKU(s).
+90 distro release(s) across 847 marketplace SKU(s).
 
-**Known supported:** 8 | **Known unsupported:** 29 | **Unknown / not yet validated:** 54
+**Known supported:** 8 | **Known unsupported:** 28 | **Unknown / not yet validated:** 54
 
 _Generated automatically from the validation database by the AzNFS pipeline; the commit date shows when it was last refreshed. Do not edit by hand._
 
@@ -11,15 +11,15 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Distro | Latest image version | Publishers | SKUs |
 | --- | --- | --- | ---: |
 | Debian 12 | 0.20260824.2580 | Debian | 2 |
-| Debian 13 | 0.20260901.2588 | Debian | 4 |
+| Debian 13 | 0.20260831.2587 | Debian | 2 |
 | Rocky 8 | 8.9.20231119 | resf | 1 |
 | Rocky 9 | 9.8.20260525 | resf | 1 |
 | Ubuntu 20.04 | 20.04.202505230 | Canonical | 2 |
-| Ubuntu 22.04 | 22.04.202608280 | Canonical | 3 |
+| Ubuntu 22.04 | 22.04.202608180 | Canonical | 1 |
 | Ubuntu 24.04 | 24.04.202607280 | Canonical | 2 |
-| Ubuntu 26.04 | 26.04.202608310 | Canonical | 6 |
+| Ubuntu 26.04 | 26.04.202608310 | Canonical | 4 |
 
-## Known unsupported (29)
+## Known unsupported (28)
 
 | Distro | Latest image version | Publishers | SKUs | Reason |
 | --- | --- | --- | ---: | --- |
@@ -39,7 +39,6 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Rocky 8 | 8.10.20260709 | resf | 1 | verify_aznfs_install_lifecycle (lisa_0_0): deployment failed. HttpResponseError: (AuthorizationFailed) The client '<id redacted>' with object id '<id redacted>' does not have authorization to perform action 'Microsoft.MarketplaceOrdering/offerTypes/publishers/offers/plans/agreements/write' over scope '<scope redacted>' or the scope is invalid. If access was recently granted, please refresh your credentials.; verify_aznfs_nfs_functional (lisa_0_1): deployment failed. HttpResponseError: (AuthorizationFailed) The client '<id redacted>' with object id '<id redacted>' does not have authorization to perform action 'Microsoft.MarketplaceOrdering/offerTypes/publishers/offers/plans/agreements/write' over scope '<scope redacted>' or the scope is invalid. If access was recently granted, please refresh your credentials.; verify_aznfs_resilience (lisa_0_2): deployment failed. HttpResponseError: (AuthorizationFailed) The client '<id redacted>' with object id '<id redacted>' does not have authorization to perform action 'Microsoft.MarketplaceOrdering/offerTypes/publishers/offers/plans/agreements/write' over scope '<scope redacted>' or the scope is invalid. If access was recently granted, please refresh your credentials. |
 | Rocky 9 | 9.8.20260525 | resf | 1 | no AzNFS packages found on prod and packages.csv does not require modification; publish packages manually and re-invoke Phase 2 |
 | SLES 12 | 2026.06.29 | SUSE | 1 | repo is found but packages are not found because distro is not supported by AzNFS |
-| SLES 15 | 2026.08.27 | SUSE | 2 | failed. AssertionError: [[Tier 2: install] aznfs install command failed:; failed. AssertionError: [[Tier 2: install] aznfs install command failed:; failed. AssertionError: [[Tier 2: install] aznfs install command failed: |
 | SUSE Linux | 2026.08.31 | SUSE | 4 | prod repo is missing |
 | Ubuntu 14.04 | 14.04.20200601 | Canonical | 1 | repo is found but packages are not found because distro is not supported by AzNFS |
 | Ubuntu 16.04 | 16.04.202512150 | Canonical | 1 | prod repo is missing |
@@ -62,7 +61,7 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Debian 10 | 0.20240703.1797 | Debian | 3 |
 | Debian 11 | 0.20260830.2586 | Debian | 7 |
 | Debian 12 | 0.20260824.2580 | Debian | 10 |
-| Debian 13 | 0.20260901.2588 | Debian | 8 |
+| Debian 13 | 0.20260901.2588 | Debian | 10 |
 | RHEL | 9.8.2026080415 | RedHat | 119 |
 | RHEL 10 | 10.2.2026080415 | RedHat | 9 |
 | RHEL 10.0 | 10.0.2026081908 | RedHat | 16 |
@@ -97,17 +96,17 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Rocky 8 | 8.9.20231119 | resf | 2 |
 | Rocky 9 | 9.8.20260525 | resf | 2 |
 | SLES 12 | 2026.06.29 | SUSE | 7 |
-| SLES 15 | 2026.08.27 | SUSE | 63 |
+| SLES 15 | 2026.08.27 | SUSE | 65 |
 | SLES 16 | 2026.08.05 | SUSE | 18 |
 | SUSE Linux | 2026.08.26 | SUSE | 110 |
 | Ubuntu 14.04 | 14.04.20200601 | Canonical | 1 |
 | Ubuntu 16.04 | 16.04.202512150 | Canonical | 9 |
 | Ubuntu 18.04 | 18.04.202608280 | Canonical | 21 |
 | Ubuntu 20.04 | 20.04.202608300 | Canonical | 29 |
-| Ubuntu 22.04 | 22.04.202608280 | Canonical | 54 |
+| Ubuntu 22.04 | 22.04.202608280 | Canonical | 56 |
 | Ubuntu 24.04 | 24.04.202608290 | Canonical | 27 |
 | Ubuntu 25.04 | 25.04.202601140 | Canonical | 7 |
 | Ubuntu 25.10 | 25.10.202607040 | Canonical | 10 |
-| Ubuntu 26.04 | 26.04.202608310 | Canonical | 31 |
+| Ubuntu 26.04 | 26.04.202608310 | Canonical | 33 |
 | Ubuntu 26.10 | 26.10.202608220 | Canonical | 4 |
 | openSUSE | 2026.02.05 | SUSE | 1 |
