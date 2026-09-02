@@ -30,6 +30,9 @@ jobs:
       - self-hosted
       - azure-vm-marketplace
 
+    permissions:
+      contents: write
+
     steps:
       # ----------------------------------------------------------------
       # 1. Checkout source
@@ -165,7 +168,14 @@ jobs:
             --max-parallel-distros "${PHASE3_MAX_PARALLEL_DISTROS:-1}"
 
       # ----------------------------------------------------------------
-      # 6. Persist the DB (validated-state updates) for the next run.
+      # 6. Refresh the committed status page with the fresh verdicts.
+      # ----------------------------------------------------------------
+      - name: Publish STATUS.md
+        if: always()
+        run: bash .github/scripts/publish_status.sh
+
+      # ----------------------------------------------------------------
+      # 7. Persist the DB (validated-state updates) for the next run.
       # ----------------------------------------------------------------
       - name: Save database cache
         if: always()
