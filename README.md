@@ -282,10 +282,11 @@ the repo root) and `--include-excluded` shows distros normally hidden by
 shared with the monthly e-mail, so both always agree.
 
 The same rollup is published as [`STATUS.md`](STATUS.md) in the repo root, so
-anyone can read the current buckets on GitHub. Phase 1 and Phase 3 regenerate it
-(`--format markdown`) via `.github/scripts/publish_status.sh` and commit it only
-when it changed; the page is also appended to each run's Actions summary. It is
-generated output — edit the pipeline, never the file.
+anyone can read the current buckets on GitHub. Phase 3 regenerates it
+(`--format markdown`) via `.github/scripts/publish_status.sh` at the end of every
+run — after the verdicts are written — and commits it only when it changed; the
+page is also appended to the run's Actions summary. It is generated output —
+edit the pipeline, never the file.
 
 **Phase 2.** Exactly **one** summary e-mail per run, listing every image and —
 for the actionable ones — the reason (to Phase 3, trusted, pending publish, or
