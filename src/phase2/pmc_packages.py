@@ -211,6 +211,7 @@ class ProdPackageIndex:
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         retries = max_retries if max_retries is not None else int(os.environ.get("HTTP_MAX_RETRIES") or "3")
         self._session = session or self._retrying_session(retries)
+        self._listings: dict[tuple[str, str, str], list[str]] = {}
 
     @staticmethod
     def _retrying_session(max_retries: int) -> requests.Session:
@@ -235,22 +236,45 @@ class ProdPackageIndex:
             raise ProbeError(f"GET {url} failed: {exc}") from exc
 
     def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None:
-        """Return the first ``candidates`` version whose prod pocket exists (200).
+        """Return the candidate version whose prod pocket actually serves AzNFS.
 
-        This is the "does a prod repo exist for this distro release?" check;
-        ``family`` is unused for the existence probe but accepted for symmetry.
-        Returns the resolved version string, or ``None`` when none exist.
+        PMC keeps empty legacy pockets for some minor releases (``rhel/8.1``,
+        ``rhel/8.2``, ``rhel/7.9``) which answer 200 but hold no packages: AzNFS
+        publishes to the major pocket (``rhel/8``), and that is also the only one
+        PMC ships a repo config for, so it is what the distro's package manager
+        resolves against. Taking the first pocket that merely *exists* therefore
+        picked an empty directory and reported the release as unsupported.
+
+        Falls back to the first pocket that exists when none carry AzNFS, so a
+        genuinely unpublished distro still reports "repo found, no packages"
+        rather than "repo missing".
         """
+        first_existing = None
         for version in candidates:
-            if self._ok(repo_base_url(distro, version, self.base_url)):
-                logger.debug("resolve_repo(%s): matched version %s of candidates %s",
+            if not self._ok(repo_base_url(distro, version, self.base_url)):
+                continue
+            if first_existing is None:
+                first_existing = version
+            if any(in_series(version_from_filename(f))
+                   for f in self.list_packages(distro, version, family)):
+                logger.debug("resolve_repo(%s): %s serves aznfs (candidates %s)",
                              distro, version, candidates)
                 return version
-        logger.debug("resolve_repo(%s): no prod pocket for any of %s", distro, candidates)
-        return None
+            logger.debug("resolve_repo(%s): pocket %s exists but is empty; trying next",
+                         distro, version)
+        if first_existing is None:
+            logger.debug("resolve_repo(%s): no prod pocket for any of %s", distro, candidates)
+        return first_existing
 
     def list_packages(self, distro: str, version: str, family: str) -> list[str]:
-        """aznfs package filenames published under this prod path (may be empty)."""
+        """aznfs package filenames published under this prod path (may be empty).
+
+        Cached per instance: resolve_repo() consults the same listing that Gate 2
+        then reads, and a Phase 2 run creates one client for the whole sweep.
+        """
+        cache_key = (distro, version, family)
+        if cache_key in self._listings:
+            return list(self._listings[cache_key])
         url = aznfs_dir_url(distro, version, family, self.base_url)
         try:
             resp = self._session.get(url, timeout=self.timeout)
@@ -258,6 +282,7 @@ class ProdPackageIndex:
             raise ProbeError(f"GET {url} failed: {exc}") from exc
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
+            self._listings[cache_key] = []
             return []
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
@@ -268,7 +293,8 @@ class ProdPackageIndex:
                 names.append(name)
         logger.debug("Gate 2 listing: GET %s -> HTTP %s, %d aznfs%s file(s)",
                      url, resp.status_code, len(names), ext)
-        return names
+        self._listings[cache_key] = names
+        return list(names)
 
     def ping(self) -> bool:
         """Lightweight reachability probe (used by pre-flight if wired)."""

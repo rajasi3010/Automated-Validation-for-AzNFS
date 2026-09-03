@@ -197,7 +197,10 @@ def test_resolve_repo_returns_first_existing_candidate():
     idx = ProdPackageIndex(base_url=BASE, session=sess)
 
     assert idx.resolve_repo("rhel", ["9.8", "9"], "yum") == "9"
-    assert sess.requested == [repo_base_url("rhel", "9.8", BASE), url9]  # tried minor first
+    # Minor probed first; the listing lookup that follows is the empty-pocket check.
+    assert [u for u in sess.requested if u.endswith("/prod/")] == [
+        repo_base_url("rhel", "9.8", BASE), url9,
+    ]
 
 
 def test_resolve_repo_none_when_no_candidate_exists():
@@ -282,3 +285,57 @@ def test_default_session_retries_transient_failures():
 
     assert retry.total == 3
     assert 503 in retry.status_forcelist
+
+
+# ---------------------------------------------------------------------------
+# Empty legacy pockets (rhel/8.1, rhel/7.9) must not shadow the real one
+# ---------------------------------------------------------------------------
+def _rhel_pages(minor_has_packages: bool):
+    empty = "<a href='../'>../</a>"
+    full = YUM_HTML_WITH_AZNFS
+    return {
+        f"{BASE}/rhel/8.1/prod/": _Resp(),
+        f"{BASE}/rhel/8/prod/": _Resp(),
+        f"{BASE}/rhel/8.1/prod/Packages/a/": _Resp(full if minor_has_packages else empty),
+        f"{BASE}/rhel/8/prod/Packages/a/": _Resp(full),
+    }
+
+
+def test_empty_minor_pocket_falls_through_to_the_pocket_that_serves_aznfs():
+    # PMC answers 200 for rhel/8.1 but publishes AzNFS to rhel/8, which is also
+    # the only pocket it ships a repo config for.
+    prod = ProdPackageIndex(session=_FakeSession(_rhel_pages(minor_has_packages=False)))
+
+    assert prod.resolve_repo("rhel", ["8.1", "8"], "yum") == "8"
+
+
+def test_minor_pocket_is_used_when_it_really_serves_aznfs():
+    prod = ProdPackageIndex(session=_FakeSession(_rhel_pages(minor_has_packages=True)))
+
+    assert prod.resolve_repo("rhel", ["8.1", "8"], "yum") == "8.1"
+
+
+def test_falls_back_to_an_existing_pocket_when_none_carry_packages():
+    # Keeps the "repo found but no packages" verdict distinct from "repo missing".
+    pages = _rhel_pages(minor_has_packages=False)
+    pages[f"{BASE}/rhel/8/prod/Packages/a/"] = _Resp("<a href='../'>../</a>")
+    prod = ProdPackageIndex(session=_FakeSession(pages))
+
+    assert prod.resolve_repo("rhel", ["8.1", "8"], "yum") == "8.1"
+
+
+def test_missing_pocket_still_resolves_to_nothing():
+    prod = ProdPackageIndex(session=_FakeSession({}))
+
+    assert prod.resolve_repo("rhel", ["8.1", "8"], "yum") is None
+
+
+def test_listings_are_cached_so_gate2_does_not_refetch():
+    session = _FakeSession(_rhel_pages(minor_has_packages=False))
+    prod = ProdPackageIndex(session=session)
+
+    prod.resolve_repo("rhel", ["8.1", "8"], "yum")
+    prod.list_packages("rhel", "8", "yum")
+
+    listing_calls = [u for u in session.requested if u.endswith("/Packages/a/")]
+    assert len(listing_calls) == len(set(listing_calls))
