@@ -20,7 +20,15 @@ def test_ubuntu_interim_releases_are_not_validated():
 def test_eol_releases_are_not_validated_and_say_why():
     assert dl.lifecycle("Ubuntu 16.04") == dl.EOL
     assert not dl.is_validation_target("Debian 10")
-    assert "2024-10" in dl.exclusion_reason("SLES 12")
+    assert "2024-06" in dl.exclusion_reason("Debian 10")
+
+
+def test_leaving_standard_support_alone_does_not_retire_a_release():
+    # Ubuntu 18.04/20.04 (ESM) and RHEL 7 (ELS) still get vendor fixes and AzNFS
+    # still publishes for them, so they stay in the validation set.
+    for label in ("Ubuntu 18.04", "Ubuntu 20.04", "RHEL 7", "SLES 12"):
+        assert dl.lifecycle(label) == dl.ACTIVE
+        assert dl.is_validation_target(label)
 
 
 def test_non_ubuntu_releases_are_unaffected_by_the_lts_rule():

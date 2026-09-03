@@ -3,8 +3,9 @@
 Two classes are excluded from validation but still discovered and reported, so
 nobody has to wonder why they vanished:
 
-* **eol**     - the vendor stopped standard support, so a missing AzNFS package
-                is expected rather than a finding.
+* **eol**     - every vendor support phase has ended (including ESM/ELS/LTSS), so
+                a missing AzNFS package is expected rather than a finding.
+                Leaving *standard* support is not enough to retire a release.
 * **interim** - Ubuntu non-LTS releases. They live ~9 months and AzNFS publishes
                 for LTS only, so validating them just manufactures noise.
 
@@ -19,14 +20,15 @@ ACTIVE = "active"
 EOL = "eol"
 INTERIM = "interim"
 
-# Vendor end-of-standard-support. Extended/ESM programmes are deliberately NOT
-# counted as supported: AzNFS does not publish for them either.
+# End of life means EVERY vendor support phase has ended, including extended
+# ones (Ubuntu ESM, RHEL ELS, SLES LTSS, Debian LTS). A release that has merely
+# left standard support is still validated: the vendor ships fixes and AzNFS
+# still publishes for it (Ubuntu 18.04/20.04 and RHEL 7 are exactly that case).
 EOL_RELEASES = {
-    "Ubuntu 14.04": "Ubuntu standard support ended 2019-04 (ESM only)",
-    "Ubuntu 16.04": "Ubuntu standard support ended 2021-04 (ESM only)",
-    "Debian 10": "Debian LTS ended 2024-06",
-    "Debian 11": "Debian LTS ended 2026-08",
-    "SLES 12": "SUSE general support ended 2024-10 (LTSS only)",
+    "Ubuntu 14.04": "all Ubuntu support ended 2024-04 (ESM over)",
+    "Ubuntu 16.04": "all Ubuntu support ended 2026-04 (ESM over)",
+    "Debian 10": "Debian LTS ended 2024-06 (community support over)",
+    "Debian 11": "Debian LTS ended 2026-08 (community support over)",
 }
 
 _UBUNTU_RELEASE_RE = re.compile(r"^Ubuntu (\d{2})\.(\d{2})$")
