@@ -7,7 +7,13 @@ Azure credentials.
 import os
 import re
 
+import distro_lifecycle
+
 _DEFAULT_EXCLUDED_PREFIXES = "centos"
+
+# Releases we track but never validate (EOL / Ubuntu interim) get their own
+# bucket so they stop inflating the unsupported count.
+OUT_OF_SCOPE = "out_of_scope"
 
 _UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I
@@ -56,9 +62,10 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
     """Group tracked images into per-validation-state buckets for the monthly reminder.
 
     Buckets are ``known_supported`` / ``known_unsupported`` / ``unknown`` (the
-    last also folds in the not-yet-decided ``pending_*`` states). For each
-    (state, distro_label) the latest version observed is kept, with the
-    contributing publishers and the number of SKUs. Returns {state: [distro,...]}.
+    last also folds in the not-yet-decided ``pending_*`` states), plus
+    ``out_of_scope`` for releases that are tracked but deliberately not validated
+    (EOL, Ubuntu interim). For each (state, distro_label) the latest version
+    observed is kept, with the contributing publishers and the number of SKUs.
 
     Each entry also carries ``skus``: the individual images behind it, with the
     per-image reason. A distro release is a group of quite different images
@@ -75,8 +82,10 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
 
     groups: dict[tuple[str, str], dict] = {}
     for img in records:
-        state = _state_of(img)
-        key = (state, img.get("distro_label", ""))
+        label = img.get("distro_label", "")
+        out_of_scope = not distro_lifecycle.is_validation_target(label)
+        state = OUT_OF_SCOPE if out_of_scope else _state_of(img)
+        key = (state, label)
         g = groups.get(key)
         if g is None:
             g = {
@@ -109,13 +118,19 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
 
     buckets: dict[str, list[dict]] = {}
     for g in groups.values():
+        if g["state"] == OUT_OF_SCOPE:
+            reason = distro_lifecycle.exclusion_reason(g["distro_label"])
+        elif g["state"] == "known_unsupported":
+            reason = "; ".join(sorted(g["reasons"]))
+        else:
+            reason = ""
         buckets.setdefault(g["state"], []).append(
             {
                 "distro_label": g["distro_label"],
                 "version": g["version"],
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
-                "reason": "; ".join(sorted(g["reasons"])),
+                "reason": reason,
                 "skus": sorted(g["skus"], key=lambda s: (s["architecture"], s["image"], s["sku"])),
             }
         )

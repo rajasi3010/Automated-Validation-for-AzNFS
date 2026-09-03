@@ -340,14 +340,14 @@ def test_enrich_merges_pending_publish_rows_and_dedupes():
     extra_row = {
         "publisher": "Debian", "image": "debian-11", "sku": "d",
         "region": "eastus", "architecture": "x86_64",
-        "family": "apt", "distro_label": "Debian 11", "last_validated_version": "",
+        "family": "apt", "distro_label": "Debian 12", "last_validated_version": "",
     }
     db = FakeDbMod(pending=[dup_row, extra_row])
 
     out = run.enrich_and_merge([e], db, "db")
 
     assert len(out) == 2
-    assert {r["distro_label"] for r in out} == {"Ubuntu 22.04", "Debian 11"}
+    assert {r["distro_label"] for r in out} == {"Ubuntu 22.04", "Debian 12"}
 
 
 def _ident(e):
@@ -484,3 +484,12 @@ def test_run_end_to_end_trusted(tmp_path):
     # ...but a trusted-only run is NOT actionable, so no summary e-mail is sent
     # (the daily known_supported re-check would otherwise mail every run).
     assert notifier_mod.summaries == []
+def test_eol_and_interim_releases_are_never_validated():
+    # Phase 1 still discovers them; Phase 2 must not spend gates or VMs on them.
+    entries = [_entry(sku="lts", distro_label="Ubuntu 24.04"),
+               _entry(sku="interim", distro_label="Ubuntu 25.10"),
+               _entry(sku="eol", distro_label="Debian 10")]
+
+    out = run.enrich_and_merge(entries, FakeDbMod(), "db")
+
+    assert [r["distro_label"] for r in out] == ["Ubuntu 24.04"]

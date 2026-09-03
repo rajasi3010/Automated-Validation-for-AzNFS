@@ -24,12 +24,15 @@ import sys
 import db_manager
 import status_rollup
 
-STATES = ("known_supported", "known_unsupported", "unknown")
+STATES = ("known_supported", "known_unsupported", "unknown", "out_of_scope")
 _TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
     "unknown": "Unknown / not yet validated",
+    "out_of_scope": "Not validated (EOL / interim release)",
 }
+# Buckets whose rows carry an explanatory reason.
+_REASON_STATES = ("known_unsupported", "out_of_scope")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -118,7 +121,7 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
                 f"(latest {row.get('version')}; {_fmt(row.get('publishers', []))}; "
                 f"{row.get('sku_count')} SKU(s))"
             )
-            if state == "known_unsupported" and row.get("reason"):
+            if state in _REASON_STATES and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
             if state == "known_unsupported":
@@ -168,7 +171,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         if not rows:
             out += ["_None._", ""]
             continue
-        unsupported = state == "known_unsupported"
+        unsupported = state in _REASON_STATES
         header = "| Distro | Latest image version | Publishers | SKUs |"
         divider = "| --- | --- | --- | ---: |"
         if unsupported:

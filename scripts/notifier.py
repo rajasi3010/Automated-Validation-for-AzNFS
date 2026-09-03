@@ -103,12 +103,14 @@ def send_phase1_summary(
 # Validation-state display order + titles for the monthly reminder. The three
 # groups the monthly digest is split into; "unknown" also folds in the
 # not-yet-decided pending_* states (anything without a final supported verdict).
-_STATE_ORDER = ["known_supported", "known_unsupported", "unknown"]
+_STATE_ORDER = ["known_supported", "known_unsupported", "unknown", "out_of_scope"]
 _STATE_TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
     "unknown": "Unknown (not yet validated)",
+    "out_of_scope": "Not validated (EOL / interim release)",
 }
+_REASON_STATES = ("known_unsupported", "out_of_scope")
 
 
 def _ordered_states(buckets: dict[str, list[dict]]) -> list[str]:
@@ -208,7 +210,7 @@ def send_monthly_reminder(
                     f"(latest {d.get('version')}; {_fmt(d.get('publishers', []))}; "
                     f"{d.get('sku_count')} SKU(s))"
                 )
-                if st == "known_unsupported" and d.get("reason"):
+                if st in _REASON_STATES and d.get("reason"):
                     line += f" -- {d['reason']}"
                 plain_parts.append(line)
                 # Name the exact images that failed: a distro release covers very
@@ -229,8 +231,9 @@ def send_monthly_reminder(
     for st in states:
         rows = buckets.get(st, [])
         title = _STATE_TITLES.get(st, st)
-        # The verdict reason only applies to the known_unsupported bucket.
-        with_reason = st == "known_unsupported"
+        # Unsupported rows carry the verdict reason; out-of-scope rows carry
+        # why they are not validated at all.
+        with_reason = st in _REASON_STATES
         sections += (
             f"<h4 style='font-family:Segoe UI,sans-serif;margin:12px 0 4px'>"
             f"{html.escape(title)} "
