@@ -11,7 +11,7 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Distro | Latest image version | Publishers | SKUs |
 | --- | --- | --- | ---: |
 | Debian 12 | 0.20260824.2580 | Debian | 2 |
-| Debian 13 | 0.20260831.2587 | Debian | 2 |
+| Debian 13 | 0.20260902.2589 | Debian | 4 |
 | Rocky 8 | 8.9.20231119 | resf | 1 |
 | Rocky 9 | 9.8.20260525 | resf | 1 |
 | Ubuntu 20.04 | 20.04.202505230 | Canonical | 2 |
@@ -61,7 +61,7 @@ _Generated automatically from the validation database by the AzNFS pipeline; the
 | Debian 10 | 0.20240703.1797 | Debian | 3 |
 | Debian 11 | 0.20260805.2561 | Debian | 5 |
 | Debian 12 | 0.20260824.2580 | Debian | 10 |
-| Debian 13 | 0.20260902.2589 | Debian | 10 |
+| Debian 13 | 0.20260902.2589 | Debian | 8 |
 | RHEL | 9.8.2026080415 | RedHat | 119 |
 | RHEL 10 | 10.2.2026080415 | RedHat | 9 |
 | RHEL 10.0 | 10.0.2026081908 | RedHat | 16 |
