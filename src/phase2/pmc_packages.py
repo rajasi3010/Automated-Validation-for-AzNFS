@@ -265,12 +265,22 @@ class ProdPackageIndex:
         return session
 
     def _ok(self, url: str) -> bool:
+        """True when the pocket exists, False only when PMC says 404.
+
+        Any other non-2xx (403 from a WAF, 401, an un-retried 5xx) proves nothing
+        about whether the repo exists, so it raises rather than reporting absence
+        -- reporting absence is what recorded permanent verdicts from outages.
+        """
         try:
             resp = self._session.get(url, timeout=self.timeout)
-            logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
-            return 200 <= resp.status_code < 300
         except requests.RequestException as exc:
             raise ProbeError(f"GET {url} failed: {exc}") from exc
+        logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
+        if 200 <= resp.status_code < 300:
+            return True
+        if resp.status_code == 404:
+            return False
+        raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
 
     def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None:
         """Return the first ``candidates`` version whose prod pocket exists (200).
@@ -300,7 +310,8 @@ class ProdPackageIndex:
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
             return []
-        resp.raise_for_status()
+        if not (200 <= resp.status_code < 300):
+            raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
         ext = ".rpm" if _is_yum(family) else ".deb"
         names: list[str] = []
         stamps: dict[str, datetime] = {}

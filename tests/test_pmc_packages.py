@@ -40,15 +40,16 @@ class _Resp:
 
 
 class _FakeSession:
-    """Returns a canned page per URL; 404 for anything unmapped."""
+    """Returns a canned page per URL; ``status`` (default 404) for anything else."""
 
-    def __init__(self, pages: dict[str, _Resp]) -> None:
+    def __init__(self, pages: dict[str, _Resp], status: int = 404) -> None:
         self.pages = pages
+        self.status = status
         self.requested: list[str] = []
 
     def get(self, url: str, timeout: int | None = None) -> _Resp:
         self.requested.append(url)
-        return self.pages.get(url, _Resp(status_code=404))
+        return self.pages.get(url, _Resp(status_code=self.status))
 
 
 # Real-shaped yum autoindex page (rhel/9 Packages/a/) with aznfs builds.
@@ -352,12 +353,12 @@ def test_all_twelve_month_abbreviations_are_recognised():
 
 
 def test_a_failed_listing_clears_the_old_timestamps():
-    # raise_for_status() on a 5xx must not leave the previous run's times behind.
+    # A 5xx must not leave the previous run's times behind.
     sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 500)])
     idx = ProdPackageIndex(base_url=BASE, session=sess)
 
     idx.list_packages("rhel", "9", "yum")
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(ProbeError):
         idx.list_packages("rhel", "9", "yum")
 
     assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
@@ -391,3 +392,22 @@ def test_default_session_retries_transient_failures():
 
     assert retry.total == 3
     assert 503 in retry.status_forcelist
+
+
+@pytest.mark.parametrize("code", [401, 403, 429, 500, 502, 503])
+def test_only_404_is_read_as_absent(code):
+    # A WAF block or an un-retried 5xx says nothing about whether the repo
+    # exists; reporting "absent" is what wrote permanent verdicts from outages.
+    prod = ProdPackageIndex(base_url=BASE, session=_FakeSession({}, status=code))
+
+    with pytest.raises(ProbeError):
+        prod.resolve_repo("rhel", ["9"], "yum")
+    with pytest.raises(ProbeError):
+        prod.list_packages("rhel", "9", "yum")
+
+
+def test_404_still_means_absent_not_a_probe_failure():
+    prod = ProdPackageIndex(base_url=BASE, session=_FakeSession({}))
+
+    assert prod.resolve_repo("rhel", ["9"], "yum") is None
+    assert prod.list_packages("rhel", "9", "yum") == []
