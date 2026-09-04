@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import timezone
+
 import pytest
 import requests
 
 from src.phase2.pmc_packages import (
+    _parse_index_time,
     AZNFS_SERIES,
     ProdPackageIndex,
     aznfs_dir_url,
@@ -53,6 +56,15 @@ YUM_HTML_WITH_AZNFS = """
 <a href="acl-debuginfo-2.2.53-5.el9.x86_64.rpm">acl-debuginfo-...</a>
 <a href="aznfs-0.3.2-1.x86_64.rpm">aznfs-0.3.2-1.x86_64.rpm</a>
 <a href="aznfs-0.3.2-1.aarch64.rpm">aznfs-0.3.2-1.aarch64.rpm</a>
+"""
+
+# The real autoindex carries a date column, which is the only publication
+# time PMC exposes. Note 0.3.49 was published AFTER 0.3.459.
+YUM_HTML_DATED = """
+<a href="../">../</a>
+<a href="./aznfs-0.3.459-1.x86_64.rpm">aznfs-0.3.459-1.x86_64.rpm</a>   02-Sep-2026 07:06  9.0 MB
+<a href="./aznfs-0.3.49-1.x86_64.rpm">aznfs-0.3.49-1.x86_64.rpm</a>     02-Sep-2026 14:09  9.0 MB
+<a href="./aznfs-0.0.676-1.x86_64.rpm">aznfs-0.0.676-1.x86_64.rpm</a>   06-Feb-2026 11:10  9.0 MB
 """
 
 YUM_HTML_NO_AZNFS = """
@@ -244,3 +256,96 @@ def test_list_packages_404_returns_empty():
     sess = _FakeSession({})
     idx = ProdPackageIndex(base_url=BASE, session=sess)
     assert idx.list_packages("debian", "11", "apt") == []
+
+
+def test_list_packages_records_publication_times():
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({url: _Resp(YUM_HTML_DATED)}))
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") > \
+           idx.published_at("rhel", "9", "yum", "aznfs-0.3.459-1.x86_64.rpm")
+
+
+def test_published_at_is_none_when_the_index_has_no_dates():
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({url: _Resp(YUM_HTML_WITH_AZNFS)}))
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.2-1.x86_64.rpm") is None
+
+
+class _SwitchingSession:
+    """Serves a different page for the same URL on each call."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.requested = []
+
+    def get(self, url, timeout=None):
+        self.requested.append(url)
+        return self.pages.pop(0) if self.pages else _Resp("", 404)
+
+
+def test_a_relisting_without_dates_clears_the_old_timestamps():
+    # If the index stops publishing the date column, the previous run's
+    # timestamps must not linger -- ordering has to fall back to version order.
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp(YUM_HTML_WITH_AZNFS)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is not None
+
+    idx.list_packages("rhel", "9", "yum")
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+def test_a_vanished_directory_clears_its_timestamps():
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 404)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+@pytest.mark.parametrize("stamp,expected", [
+    ("03-Sep-2026 17:58", (2026, 9, 3, 17, 58)),
+    ("06-Feb-2026 11:10", (2026, 2, 6, 11, 10)),
+    ("23-Mar-2025 19:05", (2025, 3, 23, 19, 5)),
+    ("31-Dec-2026 00:00", (2026, 12, 31, 0, 0)),
+])
+def test_index_time_parses_every_month_name(stamp, expected):
+    got = _parse_index_time(stamp)
+    assert (got.year, got.month, got.day, got.hour, got.minute) == expected
+    assert got.tzinfo is timezone.utc
+
+
+@pytest.mark.parametrize("stamp", ["", "   ", "not-a-date", "3-Sep-2026 17:58",
+                                   "31-Feb-2026 10:00", "03-Xxx-2026 17:58",
+                                   "03-Sep-2026", "03-Sep-2026 17:58:22"])
+def test_index_time_rejects_anything_else(stamp):
+    assert _parse_index_time(stamp) is None
+
+
+def test_all_twelve_month_abbreviations_are_recognised():
+    # %b is locale-dependent; the explicit table must cover the whole year.
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    for i, mon in enumerate(months, start=1):
+        assert _parse_index_time(f"01-{mon}-2026 00:00").month == i
+        assert _parse_index_time(f"01-{mon.upper()}-2026 00:00").month == i
+
+
+def test_a_failed_listing_clears_the_old_timestamps():
+    # raise_for_status() on a 5xx must not leave the previous run's times behind.
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 500)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    with pytest.raises(requests.HTTPError):
+        idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from src.phase2.orchestrator import (
     KNOWN_SUPPORTED,
@@ -19,10 +20,12 @@ from src.phase2.orchestrator import (
 class FakeProd:
     """Models PMC prod: which pockets exist and which aznfs files they list."""
 
-    def __init__(self, repos=None, packages=None, raise_on_resolve=False):
+    def __init__(self, repos=None, packages=None, raise_on_resolve=False,
+                 published=None):
         self.repos = repos or {}                 # distro -> {version segments}
         self.packages = packages or {}           # (distro, version) -> [filenames]
         self.raise_on_resolve = raise_on_resolve
+        self.published = published or {}         # filename -> datetime
 
     def resolve_repo(self, distro, candidates, family=""):
         if self.raise_on_resolve:
@@ -35,6 +38,9 @@ class FakeProd:
 
     def list_packages(self, distro, version, family):
         return list(self.packages.get((distro, version), []))
+
+    def published_at(self, distro, version, family, filename):
+        return self.published.get(filename)
 
 
 @dataclass
@@ -640,3 +646,99 @@ def test_run_phase2_dedups_jobs_by_url_keeping_latest_version(tmp_path):
     assert any(j["aznfs_package_url"].endswith("/rocky/9/prod/Packages/a/aznfs-0.3.458-1.x86_64.rpm") for j in jobs)
     # The summary's to_phase3 table mirrors the deduped jobs (one row per url).
     assert len(notifier.summaries[-1]["to_phase3"]) == 4
+
+
+def _at(day, hour=0):
+    return datetime(2026, 9, day, hour, tzinfo=timezone.utc)
+
+
+def test_gate3_picks_the_latest_published_not_the_highest_number():
+    # Real PMC ordering: 0.3.49 shipped AFTER 0.3.459, so a numeric max would
+    # keep validating 0.3.459 and never notice the build that superseded it.
+    prod = FakeProd(
+        repos={"rhel": {"9"}},
+        packages={("rhel", "9"): [
+            "aznfs-0.3.459-1.x86_64.rpm",
+            "aznfs-0.3.49-1.x86_64.rpm",
+        ]},
+        published={
+            "aznfs-0.3.459-1.x86_64.rpm": _at(2, 7),
+            "aznfs-0.3.49-1.x86_64.rpm": _at(2, 14),
+        },
+    )
+
+    r = process_entry(
+        entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum",
+              architecture="x86_64", image="RHEL", sku="9-lvm"),
+        prod, FakeDb(),
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.49"
+
+
+def test_a_lower_version_published_later_still_triggers_validation():
+    # Already validated 0.3.459; PMC then published 0.3.49. The package CHANGED
+    # even though the number went down, so it must be re-validated.
+    prod = FakeProd(
+        repos={"rhel": {"9"}},
+        packages={("rhel", "9"): [
+            "aznfs-0.3.459-1.x86_64.rpm",
+            "aznfs-0.3.49-1.x86_64.rpm",
+        ]},
+        published={
+            "aznfs-0.3.459-1.x86_64.rpm": _at(2, 7),
+            "aznfs-0.3.49-1.x86_64.rpm": _at(2, 14),
+        },
+    )
+
+    r = process_entry(
+        entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum",
+              architecture="x86_64", image="RHEL", sku="9-lvm",
+              last_validated_version="0.3.459"),
+        prod, FakeDb(),
+    )
+
+    assert r.outcome == "to_phase3"
+    assert r.lisa_job["aznfs_version"] == "0.3.49"
+
+
+def test_unchanged_latest_publication_stays_trusted():
+    prod = FakeProd(
+        repos={"rhel": {"9"}},
+        packages={("rhel", "9"): ["aznfs-0.3.49-1.x86_64.rpm"]},
+        published={"aznfs-0.3.49-1.x86_64.rpm": _at(2, 14)},
+    )
+
+    r = process_entry(
+        entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum",
+              architecture="x86_64", image="RHEL", sku="9-lvm",
+              last_validated_version="0.3.49"),
+        prod, FakeDb(),
+    )
+
+    assert r.outcome == "trusted"
+
+
+def test_pocket_choice_uses_publication_time_not_version_number():
+    # /rhel/9/ has the higher NUMBER, /rhel/9.0/ has the newer PUBLICATION.
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): ["aznfs-0.3.459-1.x86_64.rpm"],
+            ("rhel", "9.0"): ["aznfs-0.3.49-1.x86_64.rpm"],
+        },
+        published={
+            "aznfs-0.3.459-1.x86_64.rpm": _at(2, 7),
+            "aznfs-0.3.49-1.x86_64.rpm": _at(3, 11),
+        },
+    )
+
+    r = process_entry(
+        entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum",
+              architecture="x86_64", image="RHEL", sku="9-lvm"),
+        prod, FakeDb(),
+    )
+
+    assert r.lisa_job["aznfs_package_url"].endswith(
+        "/rhel/9.0/prod/Packages/a/aznfs-0.3.49-1.x86_64.rpm")
