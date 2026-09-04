@@ -75,11 +75,16 @@ new value (e.g. a fresh date).
 **Full re-validation from scratch (`RESET_VALIDATION`).** Ticking
 `full_revalidation` on a manual run forgets **every** verdict: each row goes back
 to `unknown` and its `reason`, `verdict_source` and `last_validated_*` markers
-are cleared, so the fleet is re-categorised exactly as on a first run. It implies
-the backlog feed, because a reset alone only marks rows `unknown` — the backlog
-is what hands them to Phase 2. Rows a concurrent Phase 3 owns
-(`pending_validation`) are left alone. Also one-shot, and armable for the
-scheduled run via the `RESET_VALIDATION` repo variable.
+are cleared, so the fleet is re-categorised exactly as on a first run. Rows a
+concurrent Phase 3 owns (`pending_validation`) are left alone. Also one-shot.
+
+**A reset needs the backlog feed to mean anything.** It only marks rows
+`unknown`; the hand-off is delta-only, so nothing re-validates them on its own —
+armed alone it *erases* every verdict and re-validates nothing. Ticking
+`full_revalidation` arms `EMIT_BACKLOG` for you. Arming it through the
+`RESET_VALIDATION` **repo variable** does **not**: set `EMIT_BACKLOG` to a new
+token as well, or the scheduled run will wipe the verdicts and stop. The scanner
+logs an error if it sees a reset without a backlog.
 
 A ticked checkbox arms these with a token unique to that run, so the box works
 every time; a repo variable must be given a **new** value to re-arm.

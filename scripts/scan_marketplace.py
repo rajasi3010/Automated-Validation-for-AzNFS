@@ -506,6 +506,16 @@ def main() -> int:
                 "(kept pending_validation) -- one-shot full re-validation armed.",
                 reset_token, n,
             )
+            # A reset only marks rows 'unknown'; the backlog feed is what hands
+            # them to Phase 2. Armed alone it therefore ERASES every verdict and
+            # re-validates nothing, leaving the whole fleet reported as unknown.
+            if os.environ.get("EMIT_BACKLOG", "").strip().lower() in ("", "0", "false", "no"):
+                logger.error(
+                    "RESET_VALIDATION was armed WITHOUT EMIT_BACKLOG: %d row(s) "
+                    "lost their verdict and nothing will re-validate them, because "
+                    "the hand-off is delta-only. Arm EMIT_BACKLOG with a new token "
+                    "(or tick full_revalidation, which arms both).", n,
+                )
             all_records = _exclude_distros(db_manager.get_all_records(config.DB_PATH))
 
     unvalidated_records = [
