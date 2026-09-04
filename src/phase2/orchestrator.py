@@ -197,7 +197,15 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     if not candidates:
         return GateResult(False, "unparseable version", details=f"{label!r}")
 
-    existing = [v for v in candidates if prod.resolve_repo(segment, [v], family)]
+    # Two rpm candidates are two paths to ONE release (rhel/8 and rhel/8.0), so
+    # both are probed and compared. Elsewhere they are ordered fallbacks with
+    # different meanings (ubuntu/22.04 then ubuntu/22) -- first match wins.
+    kind = pmc_packages.index_kind(label, entry.get("publisher", ""), family)
+    if len(candidates) > 1 and kind == "yum":
+        existing = [v for v in candidates if prod.resolve_repo(segment, [v], family)]
+    else:
+        first = prod.resolve_repo(segment, candidates, family)
+        existing = [first] if first else []
     if not existing:
         return GateResult(False, "prod repo missing", details=f"{segment} {candidates}")
 

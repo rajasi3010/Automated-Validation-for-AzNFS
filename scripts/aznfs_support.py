@@ -62,8 +62,7 @@ def is_supported_distro(label: str) -> bool:
     """True when AzNFS publishes for exactly this distro release.
 
     A different minor of a supported major is NOT in scope: AzNFS publishes to
-    rhel/8.0, and rhel/8.1 is a separate pocket carrying no AzNFS. Phase 2 skips
-    those; a manual run can still force one.
+    rhel/8.0, and rhel/8.1 is a separate release carrying no AzNFS.
     """
     s = (label or "").strip().lower()
     ver = _label_version(s)
