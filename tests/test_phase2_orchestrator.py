@@ -47,9 +47,11 @@ class FakeProd:
 @dataclass
 class FakeDb:
     updates: list[tuple] = field(default_factory=list)
+    sources: list = field(default_factory=list)
 
-    def set_validation_state(self, identity, state, reason=None):
+    def set_validation_state(self, identity, state, reason=None, verdict_source=None):
         self.updates.append((identity, state, reason))
+        self.sources.append(verdict_source)
 
 
 @dataclass
@@ -762,3 +764,13 @@ def test_unreachable_pmc_records_no_verdict_and_is_reported_as_an_error():
     summary = notifier.summaries[-1]
     assert summary["unsupported"] == []
     assert "PMC unreachable" in summary["errors"][0][1]
+def test_phase2_tags_its_verdicts_as_gate_decisions():
+    # The tag is what lets a later run re-check this cheap lookup instead of
+    # treating it as a permanent verdict.
+    prod = FakeProd(repos={}, packages={})
+    db = FakeDb()
+
+    r = process_entry(entry(distro_label="Ubuntu 24.04"), prod, db)
+
+    assert r.outcome == "known_unsupported"
+    assert db.sources == ["gate"]

@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Validation states written back to the DB ``validated`` column (mirror db_manager).
 KNOWN_SUPPORTED = "known_supported"
 KNOWN_UNSUPPORTED = "known_unsupported"
+# Phase 2 owns cheap repo/package verdicts; Phase 3 owns VM-tested ones.
+GATE_VERDICT = "gate"
 PENDING_PUBLISH = "pending_publish"
 PENDING_VALIDATION = "pending_validation"
 
@@ -54,6 +56,7 @@ class DbLike(Protocol):
         identity: tuple[str, str, str, str, str],
         state: str,
         reason: str | None = None,
+        verdict_source: str | None = None,
     ) -> None: ...
 
 
@@ -354,7 +357,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
         reason = "prod repo is missing"
         logger.info("[%s] Gate 1 FAIL (%s: %s) -> known_unsupported",
                     label or "?", g1.reason, g1.details)
-        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason, verdict_source=GATE_VERDICT)
         return Phase2Result("known_unsupported", reason=reason)
 
     distro, version = g1.segment, g1.resolved_version
@@ -381,7 +384,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
             reason = "repo is found but packages are not found because distro is not supported by AzNFS"
             logger.info("[%s] Gate 2 FAIL: no %s.x package (arch=%s) + distro NOT in support set -> known_unsupported",
                         label or "?", pmc_packages.AZNFS_SERIES, want_arch)
-            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason, verdict_source=GATE_VERDICT)
             return Phase2Result("known_unsupported", reason=reason)
         # (b) supported distro already listed in AZNFS-mount/packages.csv -> the
         # csv does not need a change; a human just needs to publish the package.
@@ -395,14 +398,14 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
             )
             logger.info("[%s] Gate 2 FAIL: no package but distro IS in packages.csv -> pending_publish (e-mail flag; DB known_unsupported)",
                         label or "?")
-            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+            db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason, verdict_source=GATE_VERDICT)
             return Phase2Result("pending_publish", reason=reason)
         # (c) supported distro MISSING from packages.csv -> needs a csv/code
         # change first; mark known_unsupported until that branch is built.
         reason = "team must update packages.csv + push branch + re-invoke Phase 2 with the new branch"
         logger.info("[%s] Gate 2 FAIL: no package + distro MISSING from packages.csv -> known_unsupported",
                     label or "?")
-        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason)
+        db.set_validation_state(ident, KNOWN_UNSUPPORTED, reason=reason, verdict_source=GATE_VERDICT)
         return Phase2Result("known_unsupported", reason=reason)
 
     logger.info("[%s] Gate 2 PASS -> %d %s.x package(s) published for arch=%s",
@@ -442,7 +445,7 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
         else:
             why = f"prod v{p} == last-validated v{v_last}, image unchanged"
         logger.info("[%s] Gate 3: %s -> known_supported (trusted, no LISA run)", label or "?", why)
-        db.set_validation_state(ident, KNOWN_SUPPORTED, reason="")
+        db.set_validation_state(ident, KNOWN_SUPPORTED, reason="", verdict_source=GATE_VERDICT)
         return Phase2Result("trusted", reason=f"no re-validation needed (v{p})")
 
     lisa_job = _make_lisa_job(entry, distro, version, family, best, p)

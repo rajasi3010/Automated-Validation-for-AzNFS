@@ -62,6 +62,8 @@ def _lazy_migrate(conn: sqlite3.Connection) -> None:
         adds.append("ALTER TABLE images ADD COLUMN last_regressed_version TEXT NOT NULL DEFAULT ''")
     if "reason" not in cols:
         adds.append("ALTER TABLE images ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+    if "verdict_source" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN verdict_source TEXT NOT NULL DEFAULT ''")
     if adds:
         logger.warning(
             "Legacy schema detected — adding new columns. "
@@ -217,6 +219,7 @@ def set_validation_state(
     state: str,
     last_validated_version: str | None = None,
     reason: str | None = None,
+    verdict_source: str | None = None,
 ) -> bool:
     """Phase 2/3: update the validation verdict for one image row.
 
@@ -235,6 +238,10 @@ def set_validation_state(
     known_unsupported); pass "" to clear it on a known_supported verdict, or
     leave it None to preserve the stored value. It is surfaced in the monthly
     digest's known_unsupported table. All other Phase 1 columns are preserved.
+
+    ``verdict_source`` records which phase decided: 'gate' (Phase 2) or 'lisa'
+    (Phase 3). Phase 2 re-checks its own 'gate' verdicts on later runs; 'lisa'
+    verdicts are left alone so a failing distro is not re-provisioned daily.
 
     Returns True if a row was updated, False if no matching row exists.
     """
@@ -257,6 +264,9 @@ def set_validation_state(
         if reason is not None:
             set_cols.append("reason = ?")
             params.append(reason)
+        if verdict_source is not None:
+            set_cols.append("verdict_source = ?")
+            params.append(verdict_source)
         params.extend([publisher, image, sku, region, architecture])
         cur = conn.execute(
             f"""
