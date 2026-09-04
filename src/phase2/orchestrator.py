@@ -477,6 +477,11 @@ def run_phase2(
         arch = e.get("architecture") or e.get("arch") or ""
         try:
             result = process_entry(e, prod, db)
+        except pmc_packages.ProbeError as exc:
+            # PMC unreachable proves nothing: leave the stored verdict alone.
+            logger.warning("PMC unreachable while checking %s: %s", label, exc)
+            errors.append((label, f"PMC unreachable, verdict left unchanged: {exc}"))
+            continue
         except Exception as exc:  # one image's failure never aborts the run
             logger.exception("Unexpected error processing %s", label)
             errors.append((label, f"orchestrator error (will retry next run): {exc}"))

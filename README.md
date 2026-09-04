@@ -310,6 +310,10 @@ they appear only as labels in the summary e-mail.
 
 1. **Gate 1 — repo exists?** `GET /<distro>/<version>/prod/` returns 200. If not,
    the release is stored `known_unsupported` (reason: *prod repo is missing*).
+   If PMC cannot be reached at all (timeout, DNS, connection reset) the probe is
+   retried and then **raises** — absence is unproven, so the row keeps its
+   previous state and the image is listed under errors in the summary. Without
+   this a single network blip permanently mislabelled a distro.
 2. **Gate 2 — package published?** The aznfs directory lists a tracked `0.3.x`
    build for this architecture. If not, the **AzNFS support policy** decides —
    the DB row is stored `known_unsupported` in every case, and the e-mail carries
