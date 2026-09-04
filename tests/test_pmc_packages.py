@@ -8,6 +8,7 @@ import requests
 from src.phase2.pmc_packages import (
     _parse_index_time,
     AZNFS_SERIES,
+    ProbeError,
     ProdPackageIndex,
     aznfs_dir_url,
     distro_segment,
@@ -287,6 +288,17 @@ class _SwitchingSession:
         return self.pages.pop(0) if self.pages else _Resp("", 404)
 
 
+class _ExplodingSession:
+    """Every request dies the way a timeout / DNS blip does."""
+
+    def __init__(self):
+        self.requested = []
+
+    def get(self, url, timeout=None):
+        self.requested.append(url)
+        raise requests.ConnectionError("read timed out")
+
+
 def test_a_relisting_without_dates_clears_the_old_timestamps():
     # If the index stops publishing the date column, the previous run's
     # timestamps must not linger -- ordering has to fall back to version order.
@@ -349,3 +361,33 @@ def test_a_failed_listing_clears_the_old_timestamps():
         idx.list_packages("rhel", "9", "yum")
 
     assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_a_missing_repo():
+    # Returning "missing" here is what recorded permanent known_unsupported
+    # verdicts for distros whose repo existed all along.
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.resolve_repo("ubuntu", ["24.04"], "apt")
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_no_packages():
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.list_packages("ubuntu", "24.04", "apt")
+
+
+def test_http_404_still_means_genuinely_absent():
+    prod = ProdPackageIndex(session=_FakeSession({}))
+
+    assert prod.resolve_repo("ubuntu", ["24.04"], "apt") is None
+    assert prod.list_packages("ubuntu", "24.04", "apt") == []
+
+
+def test_default_session_retries_transient_failures():
+    retry = ProdPackageIndex()._session.get_adapter("https://").max_retries
+
+    assert retry.total == 3
+    assert 503 in retry.status_forcelist
