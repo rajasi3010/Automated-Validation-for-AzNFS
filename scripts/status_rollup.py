@@ -61,6 +61,11 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
     last also folds in the not-yet-decided ``pending_*`` states). For each
     (state, distro_label) the latest version observed is kept, with the
     contributing publishers and the number of SKUs. Returns {state: [distro,...]}.
+
+    Each entry also carries ``skus``: the individual images behind it, with the
+    per-image reason. A distro release is a group of quite different images
+    (server, minimal, cvm, pro, arm64), so "Ubuntu 24.04 is unsupported" is not
+    actionable on its own -- the reports name the exact SKU that failed.
     """
     def _state_of(img: dict) -> str:
         v = img.get("validated", "") or ""
@@ -83,6 +88,7 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
                 "publishers": set(),
                 "sku_count": 0,
                 "reasons": set(),
+                "skus": [],
             }
             groups[key] = g
         if img.get("publisher"):
@@ -94,6 +100,13 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
         r = redact((img.get("reason") or "").strip())
         if state == "known_unsupported" and r:
             g["reasons"].add(r)
+        g["skus"].append({
+            "image": img.get("image", ""),
+            "sku": img.get("sku", ""),
+            "architecture": img.get("architecture", ""),
+            "version": img.get("version", ""),
+            "reason": r,
+        })
         g["sku_count"] += 1
 
     buckets: dict[str, list[dict]] = {}
@@ -105,6 +118,7 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
                 "reason": "; ".join(sorted(g["reasons"])),
+                "skus": sorted(g["skus"], key=lambda s: (s["architecture"], s["image"], s["sku"])),
             }
         )
     for st in buckets:

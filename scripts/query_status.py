@@ -121,8 +121,26 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
             if state == "known_unsupported" and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
+            if state == "known_unsupported":
+                for s in row.get("skus", []):
+                    sku_line = f"      * {s.get('image')}/{s.get('sku')} ({s.get('architecture')})"
+                    if s.get("reason"):
+                        sku_line += f" -- {s['reason']}"
+                    lines.append(sku_line)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _sku_cell(row: dict) -> str:
+    """Failing images for one distro, one per line inside a Markdown table cell."""
+    skus = row.get("skus") or []
+    if not skus:
+        return row.get("reason") or "-"
+    parts = []
+    for s in skus:
+        label = f"`{s.get('image')}/{s.get('sku')}` ({s.get('architecture')})"
+        parts.append(f"{label} — {s['reason']}" if s.get("reason") else label)
+    return "<br>".join(parts)
 
 
 def render_markdown(buckets: dict[str, list[dict]]) -> str:
@@ -154,7 +172,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         header = "| Distro | Latest image version | Publishers | SKUs |"
         divider = "| --- | --- | --- | ---: |"
         if unsupported:
-            header += " Reason |"
+            header += " Failing SKUs |"
             divider += " --- |"
         out += [header, divider]
         for row in rows:
@@ -163,7 +181,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
             if unsupported:
-                line += f" {row.get('reason') or '-'} |"
+                line += f" {_sku_cell(row)} |"
             out.append(line)
         out.append("")
     return "\n".join(out).rstrip() + "\n"
