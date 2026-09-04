@@ -159,8 +159,8 @@ to the default list in `scripts/config.py`. Formatting/tables live in
 ### 11. Change the DB schema or validation states
 `db/schema.sql` (authoritative, lazy-migrated at runtime) and
 `scripts/db_manager.py`. Only three states are ever persisted: `unknown`,
-`known_supported`, `known_unsupported` (`pending_publish` / `pending_validation`
-are e-mail-only labels, never stored).
+`known_supported`, `known_unsupported` (`pending_publish` is an e-mail-only
+label, never stored).
 
 ### 12. Run a phase manually
 ```bash
