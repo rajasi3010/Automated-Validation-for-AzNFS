@@ -90,29 +90,23 @@ def index_kind(distro_label: str, publisher: str = "", family: str = "") -> str:
     return (rule or {}).get("index", "apt")
 
 
-def version_candidates(distro_label: str, fallback_version: str = "",
-                       family: str = "") -> list[str]:
+def version_candidates(distro_label: str, fallback_version: str = "") -> list[str]:
     """Ordered PMC version segments to try for a distro_label.
 
-    rpm families: only an ``x`` / ``x.0`` release probes both ``x`` and ``x.0``
-    (PMC serves the same pocket at both -- rhel/8 and rhel/8.0 carry the same 47
-    builds). Any other minor probes only itself, so 8.1 never resolves to 8:
-    rhel/8.1 is its own pocket and AzNFS publishes nothing there.
+    An ``x`` / ``x.0`` release is served at both paths -- rhel/8 and rhel/8.0 are
+    the same pocket -- so both are tried. Every other release is tried only as
+    itself: rhel/8.1 must never resolve to rhel/8, and ubuntu/22.04 must never
+    resolve to ubuntu/22, because those are different releases.
 
-    Ubuntu/Debian publish per release, so "Ubuntu 22.04" -> ["22.04", "22"].
     Falls back to the marketplace ``version`` when the label has no number.
     """
     m = _VER_RE.search(distro_label or "") or _VER_RE.search(fallback_version or "")
     if not m:
         return []
     major, minor = m.group(1), m.group(2)
-    if _is_yum(family):
-        if minor in (None, "0"):
-            return [major, f"{major}.0"]
-        return [f"{major}.{minor}"]
-    if minor is not None:
-        return [f"{major}.{minor}", major]
-    return [major]
+    if minor is None or minor == "0":
+        return [major, f"{major}.0"]
+    return [f"{major}.{minor}"]
 
 
 # ---------------------------------------------------------------------------
