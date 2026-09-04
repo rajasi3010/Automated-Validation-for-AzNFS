@@ -181,9 +181,14 @@ def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
             _split("EXCLUDED_OFFER_SUBSTRINGS", "advanced-sla"))
 
 
-def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str,
-                     enforce_matrix: bool = True) -> list[dict]:
+def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
     """Build Phase 2's work queue from the Phase 1 hand-off + the DB.
+
+    The incoming ``entries`` are validated as given -- Phase 1 already limited
+    the hand-off to the AzNFS support matrix, and a manual ``--distros`` run is
+    an explicit operator choice. Only the DB re-feeds below are matrix-checked,
+    since those are re-entries Phase 2 initiates itself and can still surface a
+    legacy row for a release AzNFS never published for.
 
     The DB ``validated`` state is authoritative:
 
@@ -191,10 +196,6 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str,
       ``known_unsupported`` (terminal until an explicit reset). Skipping keeps a
       re-run over a reused Phase 1 artifact idempotent and avoids double-
       dispatching / racing a concurrent Phase 3.
-    * Skip releases outside the AzNFS support matrix: a missing package there is
-      expected, so a verdict would be noise. They stay in the DB and are reported
-      separately. ``enforce_matrix=False`` lifts this for an explicit manual
-      ``--distros`` selection, where the operator has asked for that distro.
     * Enrich the survivors with their DB ``last_validated_version`` and tag their
       ``_db_state`` (Gate 3's baseline; the tag lets process_entry avoid
       downgrading a known_supported distro on a transient re-check failure).
@@ -212,10 +213,6 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str,
     for e in entries:
         ident = _identity(e)
         seen.add(ident)
-        if enforce_matrix and not aznfs_support.is_supported_distro(e.get("distro_label", "")):
-            logger.info("Skipping %s: %s is %s", ident, e.get("distro_label"),
-                        aznfs_support.OUT_OF_MATRIX_REASON)
-            continue
         v_last = e.get("last_validated_version", "")
         v_regressed = e.get("last_regressed_version", "")
         v_img = e.get("last_validated_image_version", "")
@@ -245,8 +242,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str,
                 row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
                 row.get("region", ""), row.get("architecture", ""),
             )
-            if ident in seen or (enforce_matrix
-                                 and not aznfs_support.is_supported_distro(row.get("distro_label", ""))):
+            if ident in seen or not aznfs_support.is_supported_distro(row.get("distro_label", "")):
                 continue
             seen.add(ident)
             out.append(row)  # DB rows already carry family / distro_label / last_validated_version
@@ -270,8 +266,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str,
             hay = f"{row.get('image', '')} {row.get('sku', '')}".casefold()
             return (any(label.startswith(p) for p in distro_prefixes)
                     or any(s in hay for s in offer_subs)
-                    or (enforce_matrix
-                        and not aznfs_support.is_supported_distro(row.get("distro_label", ""))))
+                    or not aznfs_support.is_supported_distro(row.get("distro_label", "")))
 
         reps: dict[tuple, dict] = {}
         for row in db_mod.get_rows_by_state(db_path, "known_supported"):
@@ -417,9 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             before = len(entries)
             entries = [e for e in entries if e.get("distro_label", "").casefold() in wanted]
             logger.info("Distro filter %s: %d -> %d entr(ies)", sorted(wanted), before, len(entries))
-        # An explicit --distros selection is an operator decision: honour it even
-        # for distros outside the AzNFS support matrix.
-        entries = enrich_and_merge(entries, db_mod, DB_PATH, enforce_matrix=not wanted)
+        entries = enrich_and_merge(entries, db_mod, DB_PATH)
 
     if args.dry_run:
         logger.info("Dry run: %d entr(ies)", len(entries))

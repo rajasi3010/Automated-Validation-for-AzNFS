@@ -3,17 +3,15 @@
 Mirrors the publish targets in AZNFS-mount/packages.csv, minus the EOL CentOS
 entries (CentOS-7.0 / CentOS-8.0), which Phase 1 drops upstream anyway.
 
-Anything outside this matrix is discovered and tracked, but never validated: a
-missing AzNFS package there is expected, not a finding. Keeping it here (rather
-than in ``src/phase2``) lets Phase 1's reporting and Phase 2's gates share one
-definition instead of drifting apart.
+Phase 1 applies this to its Phase 2 hand-off, so anything outside the matrix is
+still discovered, stored and reported -- just never validated, because a missing
+AzNFS package there is expected rather than a finding. Phase 2 then validates
+whatever it is handed and does not re-judge scope.
 """
 
 import re
 
 # packages.csv column 1, verbatim, so this can be diffed against the source.
-# RHEL and Rocky publish per minor (RHEL-8.0, Rocky-9.0) but the repo behind it
-# serves the whole major, so those families are matched on the major below.
 PUBLISH_TARGETS = {
     "Ubuntu": {"18.04", "20.04", "22.04", "24.04", "26.04"},
     "RHEL": {"7.0", "7.3", "8.0", "9.0", "10.0"},

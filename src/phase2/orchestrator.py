@@ -164,11 +164,28 @@ def _packages_csv_mentions_distro(label: str) -> bool:
 # ---------------------------------------------------------------------------
 # Gate 1: does a prod repo exist for this distro release?
 # ---------------------------------------------------------------------------
+def _newest_package(prod: ProdLike, segment: str, version: str, family: str,
+                    want_arch: str) -> tuple[int, ...]:
+    """Numeric version of the newest in-series aznfs package in one pocket."""
+    return max(
+        (pmc_packages.version_tuple(pmc_packages.version_from_filename(f))
+         for f in prod.list_packages(segment, version, family)
+         if pmc_packages.file_arch(f, family) == want_arch
+         and pmc_packages.in_series(pmc_packages.version_from_filename(f))),
+        default=(),
+    )
+
+
 def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     """A PMC prod pocket exists for this image's distro release.
 
     Resolves the ``<distro>`` segment + ``<version>`` candidates from the image's
     ``distro_label`` (no codename map) and probes ``/<distro>/<version>/prod/``.
+
+    PMC serves an x.0 release at two paths (rhel/8 and rhel/8.0), and they are
+    not guaranteed to be in step, so when both exist the one carrying the newer
+    aznfs package wins -- that pocket is what Gate 2 counts and what Phase 3
+    installs from. Ties keep candidate order.
     """
     label = entry.get("distro_label", "")
     family = entry.get("family") or ""
@@ -180,9 +197,17 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     if not candidates:
         return GateResult(False, "unparseable version", details=f"{label!r}")
 
-    resolved = prod.resolve_repo(segment, candidates, family)
-    if not resolved:
+    existing = [v for v in candidates if prod.resolve_repo(segment, [v], family)]
+    if not existing:
         return GateResult(False, "prod repo missing", details=f"{segment} {candidates}")
+
+    resolved = existing[0]
+    if len(existing) > 1:
+        want_arch = pmc_packages.normalize_arch(entry.get("architecture", ""), family)
+        resolved = max(existing,
+                       key=lambda v: _newest_package(prod, segment, v, family, want_arch))
+        logger.info("[%s] %s pockets %s both exist -> using /%s/%s/ (newest package)",
+                    label or "?", segment, existing, segment, resolved)
     return GateResult(True, segment=segment, resolved_version=resolved)
 
 

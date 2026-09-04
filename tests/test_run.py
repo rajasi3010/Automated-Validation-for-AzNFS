@@ -486,22 +486,12 @@ def test_run_end_to_end_trusted(tmp_path):
     assert notifier_mod.summaries == []
 
 
-def test_only_matrix_distros_are_validated_automatically():
-    # Phase 1 still discovers everything; Phase 2 picks up only what AzNFS targets.
+def test_phase2_validates_whatever_it_is_handed():
+    # Scope is Phase 1's job. Phase 2 must not second-guess its input, so a
+    # manually selected out-of-matrix distro flows through untouched.
     entries = [_entry(sku="in", distro_label="Ubuntu 24.04"),
-               _entry(sku="interim", distro_label="Ubuntu 25.10"),
-               _entry(sku="old", distro_label="Ubuntu 16.04"),
                _entry(sku="debian", distro_label="Debian 12")]
 
     out = run.enrich_and_merge(entries, FakeDbMod(), "db")
 
-    assert [r["distro_label"] for r in out] == ["Ubuntu 24.04"]
-
-
-def test_an_explicit_distro_selection_overrides_the_matrix():
-    # If an operator names a distro, run it -- that is a deliberate decision.
-    entries = [_entry(sku="debian", distro_label="Debian 12")]
-
-    out = run.enrich_and_merge(entries, FakeDbMod(), "db", enforce_matrix=False)
-
-    assert [r["distro_label"] for r in out] == ["Debian 12"]
+    assert [r["distro_label"] for r in out] == ["Ubuntu 24.04", "Debian 12"]
