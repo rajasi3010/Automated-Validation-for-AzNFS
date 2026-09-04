@@ -48,8 +48,9 @@ def test_pass_rhel_minor_falls_back_to_major():
     assert r.passed
     assert r.segment == "rhel"
     assert r.resolved_version == "9"
-    # tried 9.8 before falling back to 9
-    assert prod.resolve_calls[-1] == ("rhel", ("9.8", "9"), "yum")
+    # The image's own minor is never probed: rhel/9.8 does not exist, and empty
+    # pockets like rhel/8.1 would otherwise shadow the repo that has the package.
+    assert prod.resolve_calls[-1] == ("rhel", ("9", "9.0"), "yum")
 
 
 def test_fail_unmapped_distro():

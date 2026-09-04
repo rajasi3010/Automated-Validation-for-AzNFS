@@ -176,7 +176,7 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     if not segment:
         return GateResult(False, "unmapped distro", details=label or entry.get("publisher", ""))
 
-    candidates = pmc_packages.version_candidates(label, entry.get("version", ""))
+    candidates = pmc_packages.version_candidates(label, entry.get("version", ""), family)
     if not candidates:
         return GateResult(False, "unparseable version", details=f"{label!r}")
 
