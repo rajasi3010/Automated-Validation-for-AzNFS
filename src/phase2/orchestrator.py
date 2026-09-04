@@ -166,14 +166,28 @@ def _packages_csv_mentions_distro(label: str) -> bool:
 # ---------------------------------------------------------------------------
 def _newest_package(prod: ProdLike, segment: str, version: str, family: str,
                     want_arch: str) -> tuple[int, ...]:
-    """Numeric version of the newest in-series aznfs package in one pocket."""
-    return max(
-        (pmc_packages.version_tuple(pmc_packages.version_from_filename(f))
-         for f in prod.list_packages(segment, version, family)
-         if pmc_packages.file_arch(f, family) == want_arch
-         and pmc_packages.in_series(pmc_packages.version_from_filename(f))),
-        default=(),
-    )
+    """Numeric version of the newest in-series aznfs package in one pocket.
+
+    Best-effort: a listing failure here scores the pocket as empty rather than
+    failing the image, so a broken /rhel/8.0/ cannot take down an image whose
+    /rhel/8/ is healthy. Gate 2 lists the pocket that wins and does surface a
+    failure there, so a verdict is never recorded off a listing that errored.
+    """
+    try:
+        files = prod.list_packages(segment, version, family)
+    except Exception as exc:  # noqa: BLE001 - any listing failure means "unknown"
+        logger.warning("Could not list /%s/%s/ while choosing a pocket: %s",
+                       segment, version, exc)
+        return ()
+
+    best: tuple[int, ...] = ()
+    for name in files:
+        if pmc_packages.file_arch(name, family) != want_arch:
+            continue
+        version_str = pmc_packages.version_from_filename(name)
+        if pmc_packages.in_series(version_str):
+            best = max(best, pmc_packages.version_tuple(version_str))
+    return best
 
 
 def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:

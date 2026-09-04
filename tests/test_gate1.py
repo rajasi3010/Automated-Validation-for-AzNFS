@@ -23,7 +23,10 @@ class FakeProd:
         return None
 
     def list_packages(self, distro, version, family):
-        return self.packages.get((distro, version), [])
+        listing = self.packages.get((distro, version), [])
+        if isinstance(listing, Exception):
+            raise listing
+        return listing
 
 
 def entry(**kw):
@@ -130,5 +133,20 @@ def test_x0_pocket_tie_keeps_candidate_order():
 def test_x0_release_falls_back_to_the_only_pocket_that_exists():
     prod = FakeProd(repos={"rhel": {"9.0"}})
     r = gate1_repo_exists(entry(distro_label="RHEL 9.0", family="yum"), prod)
+    assert r.passed
+    assert r.resolved_version == "9.0"
+
+
+def test_a_broken_listing_does_not_sink_the_healthy_pocket():
+    # A 5xx on one pocket must not fail the image when the other pocket is fine.
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): RuntimeError("boom"),
+            ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+        },
+    )
+    r = gate1_repo_exists(
+        entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
     assert r.passed
     assert r.resolved_version == "9.0"
