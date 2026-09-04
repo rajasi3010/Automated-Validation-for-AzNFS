@@ -23,6 +23,7 @@ import functools
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -39,6 +40,12 @@ _MAP_PATH = Path(__file__).with_name("distro_map.yaml")
 
 # Hyperlinks in a directory autoindex page, e.g. href="aznfs_0.3.2_amd64.deb".
 _HREF_RE = re.compile(r"""href=["']([^"'?]+)["']""", re.IGNORECASE)
+# Same anchor plus the autoindex's date column: `</a>   03-Sep-2026 17:58  9.0 MB`.
+_INDEX_ENTRY_RE = re.compile(
+    r"""href=["']([^"'?]+)["'][^>]*>.*?</a>\s+"""
+    r"(\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2})",
+    re.IGNORECASE,
+)
 _AZNFS_VERSION_RE = re.compile(r"aznfs[_-]v?([0-9]+(?:\.[0-9]+)*)")
 _VER_RE = re.compile(r"(\d+)(?:\.(\d+))?")
 
@@ -202,6 +209,8 @@ class ProdPackageIndex:
         # (an unset repo variable arrives as ''), which int('') would reject.
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         self._session = session or requests.Session()
+        # (aznfs dir url, filename) -> autoindex timestamp, filled by list_packages.
+        self._published_at: dict[tuple[str, str], datetime] = {}
 
     def _ok(self, url: str) -> bool:
         try:
@@ -241,6 +250,13 @@ class ProdPackageIndex:
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
         names: list[str] = []
+        for href, stamp in _INDEX_ENTRY_RE.findall(resp.text):
+            name = href.split("/")[-1].split("?")[0]
+            try:
+                self._published_at[(url, name)] = datetime.strptime(
+                    stamp, "%d-%b-%Y %H:%M").replace(tzinfo=timezone.utc)
+            except ValueError:
+                logger.debug("Unparseable PMC timestamp %r for %s", stamp, name)
         for href in _HREF_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             if name.lower().startswith("aznfs") and name.lower().endswith(ext):
@@ -248,6 +264,16 @@ class ProdPackageIndex:
         logger.debug("Gate 2 listing: GET %s -> HTTP %s, %d aznfs%s file(s)",
                      url, resp.status_code, len(names), ext)
         return names
+
+    def published_at(self, distro: str, version: str, family: str,
+                     filename: str) -> datetime | None:
+        """When PMC published ``filename``, or None if the index gave no date.
+
+        Only meaningful after ``list_packages`` has read that directory; the
+        autoindex is the only place PMC exposes a publication time.
+        """
+        url = aznfs_dir_url(distro, version, family, self.base_url)
+        return self._published_at.get((url, filename))
 
     def ping(self) -> bool:
         """Lightweight reachability probe (used by pre-flight if wired)."""

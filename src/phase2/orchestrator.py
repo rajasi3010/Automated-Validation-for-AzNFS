@@ -164,9 +164,27 @@ def _packages_csv_mentions_distro(label: str) -> bool:
 # ---------------------------------------------------------------------------
 # Gate 1: does a prod repo exist for this distro release?
 # ---------------------------------------------------------------------------
+_UNKNOWN_PUBLISH_TIME = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _publish_key(prod: ProdLike, segment: str, version: str, family: str,
+                 name: str) -> tuple:
+    """Sort key for "which package is latest": publication time, then version.
+
+    PMC version numbers are NOT publication-sequential -- 0.3.49 shipped after
+    0.3.459 -- so the autoindex timestamp is authoritative and the version only
+    breaks ties. Clients without timestamps (test fakes, an index that omits the
+    date column) fall back to version order, which is the previous behaviour.
+    """
+    published_at = getattr(prod, "published_at", None)
+    when = published_at(segment, version, family, name) if callable(published_at) else None
+    return (when or _UNKNOWN_PUBLISH_TIME,
+            pmc_packages.version_tuple(pmc_packages.version_from_filename(name)))
+
+
 def _newest_package(prod: ProdLike, segment: str, version: str, family: str,
-                    want_arch: str) -> tuple[int, ...]:
-    """Numeric version of the newest in-series aznfs package in one pocket.
+                    want_arch: str) -> tuple:
+    """Sort key of the latest-published in-series aznfs package in one pocket.
 
     Best-effort: a listing failure here scores the pocket as empty rather than
     failing the image, so a broken /rhel/8.0/ cannot take down an image whose
@@ -180,14 +198,11 @@ def _newest_package(prod: ProdLike, segment: str, version: str, family: str,
                        segment, version, exc)
         return ()
 
-    best: tuple[int, ...] = ()
-    for name in files:
-        if pmc_packages.file_arch(name, family) != want_arch:
-            continue
-        version_str = pmc_packages.version_from_filename(name)
-        if pmc_packages.in_series(version_str):
-            best = max(best, pmc_packages.version_tuple(version_str))
-    return best
+    keys = [_publish_key(prod, segment, version, family, name)
+            for name in files
+            if pmc_packages.file_arch(name, family) == want_arch
+            and pmc_packages.in_series(pmc_packages.version_from_filename(name))]
+    return max(keys, default=())
 
 
 def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
@@ -393,15 +408,18 @@ def process_entry(entry: dict, prod: ProdLike, db: DbLike) -> Phase2Result:
     logger.info("[%s] Gate 2 PASS -> %d %s.x package(s) published for arch=%s",
                 label or "?", len(arch_files), pmc_packages.AZNFS_SERIES, want_arch)
 
-    # Gate 3: validation needed? Numeric-latest 0.3.x prod version vs what Phase 3 last validated.
-    best = max(arch_files, key=lambda f: pmc_packages.version_tuple(pmc_packages.version_from_filename(f)))
+    # Gate 3: validation needed? Latest-PUBLISHED 0.3.x package vs what Phase 3
+    # last validated. Publication order, not version order: 0.3.49 shipped after
+    # 0.3.459, so a numeric max would keep validating a superseded build.
+    best = max(arch_files,
+               key=lambda f: _publish_key(prod, distro, version, family, f))
     p = pmc_packages.version_from_filename(best)
     v_last = (entry.get("last_validated_version") or "").strip()
     v_regressed = (entry.get("last_regressed_version") or "").strip()
 
-    is_newer = (not v_last) or (
-        pmc_packages.version_tuple(p) > pmc_packages.version_tuple(v_last)
-    )
+    # A CHANGED package needs validating, not just a numerically greater one --
+    # the newest publication can carry a lower version than the last validated.
+    is_newer = (not v_last) or p != v_last
     # A version already known to regress on THIS supported distro is NOT re-tested
     # (it would just fail + re-alert every run); a strictly newer package supersedes
     # the marker and IS validated -> auto-recovery. Gate this on the supported state

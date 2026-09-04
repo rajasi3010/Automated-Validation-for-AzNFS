@@ -55,6 +55,15 @@ YUM_HTML_WITH_AZNFS = """
 <a href="aznfs-0.3.2-1.aarch64.rpm">aznfs-0.3.2-1.aarch64.rpm</a>
 """
 
+# The real autoindex carries a date column, which is the only publication
+# time PMC exposes. Note 0.3.49 was published AFTER 0.3.459.
+YUM_HTML_DATED = """
+<a href="../">../</a>
+<a href="./aznfs-0.3.459-1.x86_64.rpm">aznfs-0.3.459-1.x86_64.rpm</a>   02-Sep-2026 07:06  9.0 MB
+<a href="./aznfs-0.3.49-1.x86_64.rpm">aznfs-0.3.49-1.x86_64.rpm</a>     02-Sep-2026 14:09  9.0 MB
+<a href="./aznfs-0.0.676-1.x86_64.rpm">aznfs-0.0.676-1.x86_64.rpm</a>   06-Feb-2026 11:10  9.0 MB
+"""
+
 YUM_HTML_NO_AZNFS = """
 <a href="../">../</a>
 <a href="acl-debuginfo-2.2.53-5.el9.x86_64.rpm">acl-debuginfo-...</a>
@@ -244,3 +253,20 @@ def test_list_packages_404_returns_empty():
     sess = _FakeSession({})
     idx = ProdPackageIndex(base_url=BASE, session=sess)
     assert idx.list_packages("debian", "11", "apt") == []
+
+
+def test_list_packages_records_publication_times():
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({url: _Resp(YUM_HTML_DATED)}))
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") > \
+           idx.published_at("rhel", "9", "yum", "aznfs-0.3.459-1.x86_64.rpm")
+
+
+def test_published_at_is_none_when_the_index_has_no_dates():
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({url: _Resp(YUM_HTML_WITH_AZNFS)}))
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.2-1.x86_64.rpm") is None
