@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from . import pmc_packages
+import aznfs_support
 import requests
 
 logger = logging.getLogger(__name__)
@@ -107,33 +108,14 @@ def _identity(entry: dict) -> tuple[str, str, str, str, str]:
 _AZNFS_PACKAGES_CSV_URL = (
     "https://raw.githubusercontent.com/Azure/AZNFS-mount/main/packages.csv"
 )
-_SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
-_SUPPORTED_RHEL = {"7", "8", "9", "10"}
-_SUPPORTED_ROCKY = {"8", "9"}
-_SUPPORTED_SLES = {"15", "16"}
 
 
 def _major_minor(label: str) -> tuple[str, str]:
-    m = re.search(r"(10|\d+)(?:\.(\d+))?", label)
-    if not m:
-        return "", ""
-    return m.group(1), m.group(2) or ""
+    return aznfs_support.major_minor(label)
 
 
 def _is_aznfs_supported_distro(label: str) -> bool:
-    s = (label or "").strip().lower()
-    major, minor = _major_minor(s)
-
-    if "ubuntu" in s:
-        ver = f"{major}.{minor}" if major and minor else ""
-        return ver in _SUPPORTED_UBUNTU
-    if "rhel" in s or "redhat" in s or "red hat" in s:
-        return major in _SUPPORTED_RHEL
-    if "rocky" in s:
-        return major in _SUPPORTED_ROCKY
-    if "sles" in s or "suse" in s:
-        return major in _SUPPORTED_SLES
-    return False
+    return aznfs_support.is_supported_distro(label)
 
 
 def _packages_csv_mentions_distro(label: str) -> bool:
