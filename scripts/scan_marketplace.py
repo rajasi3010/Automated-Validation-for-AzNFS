@@ -241,7 +241,8 @@ def dedup_backlog(records: list[dict]) -> list[dict]:
             continue
         key = (r.get("distro_label", ""), r.get("architecture", ""))
         cur = chosen.get(key)
-        if cur is None or (r.get("version", "") > cur.get("version", "")):
+        if cur is None or (db_manager.version_tuple(r.get("version", ""))
+                           > db_manager.version_tuple(cur.get("version", ""))):
             chosen[key] = r
     return sorted(
         chosen.values(),

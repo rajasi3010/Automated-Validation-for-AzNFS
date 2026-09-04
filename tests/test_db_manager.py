@@ -62,3 +62,25 @@ def test_reset_respects_exclude_states_but_still_clears_markers(tmp_path):
     conn.close()
     assert kept == "pending_validation"           # excluded row untouched
     assert was_reset == ("unknown", "", "")         # reset + markers cleared
+
+
+def test_version_tuple_orders_rolling_minors_numerically():
+    # '9.10' is newer than '9.8' but sorts below it as a string.
+    assert db_manager.version_tuple("9.10.2026062413") > db_manager.version_tuple("9.8.2026062413")
+    assert db_manager.version_tuple("24.04.202608280") > db_manager.version_tuple("24.04.202608260")
+    assert db_manager.version_tuple("latest") == (0,)
+    assert db_manager.version_tuple("") == (0,)
+
+
+def test_upsert_sees_a_rolling_minor_as_an_update(tmp_path):
+    db = str(tmp_path / "m.db")
+    db_manager.initialize(db, "db/schema.sql")
+    args = ("RedHat", "RHEL", "9-lvm", "eastus")
+    assert db_manager.check_and_upsert(db, *args[:3], "9.8.2026062413", args[3],
+                                       "x86_64", "yum", "RHEL 9") == db_manager.NEW
+    # A string compare ranks 9.10 BELOW 9.8, so this update was silently dropped.
+    assert db_manager.check_and_upsert(db, *args[:3], "9.10.2026062413", args[3],
+                                       "x86_64", "yum", "RHEL 9") == db_manager.UPDATED
+
+    row = db_manager.get_image_record(db, "RedHat", "RHEL", "9-lvm", "eastus", "x86_64")
+    assert row["version"] == "9.10.2026062413"

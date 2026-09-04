@@ -12,6 +12,7 @@ check_and_upsert() returns one of:
 
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -38,6 +39,20 @@ PROBE_ERROR = "probe_error"
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    """Parse a marketplace version into ints for NUMERIC comparison.
+
+    '9.10.2026062413' is newer than '9.8.2026062413' but sorts BELOW it as a
+    string, because '1' < '8'. Every version comparison in Phase 1 must go
+    through this; the date suffix hides the bug until a minor reaches 10.
+    """
+    parts: list[int] = []
+    for token in str(version or "").split("."):
+        m = re.match(r"\d+", token.strip())
+        parts.append(int(m.group()) if m else 0)
+    return tuple(parts)
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -154,9 +169,11 @@ def check_and_upsert(
             )
             return NEW
 
-        # Existing SKU — compare versions lexicographically (marketplace
-        # versions are zero-padded date-style: '24.04.202405010', '9.3.2023121113').
-        if version > row["version"]:
+        # Existing SKU -- compare numerically. Marketplace versions are date-style
+        # ('24.04.202405010', '9.3.2023121113'), but the leading minor rolls past
+        # 9, and a string compare would rank '9.10.x' below '9.8.x' and miss the
+        # update entirely.
+        if version_tuple(version) > version_tuple(row["version"]):
             cursor.execute(
                 """
                 UPDATE images

@@ -7,6 +7,8 @@ Azure credentials.
 import os
 import re
 
+import db_manager
+
 _DEFAULT_EXCLUDED_PREFIXES = "centos"
 
 _UUID_RE = re.compile(
@@ -85,8 +87,8 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
             groups[key] = g
         if img.get("publisher"):
             g["publishers"].add(img["publisher"])
-        # Marketplace versions sort lexicographically (zero-padded date-style).
-        if img.get("version", "") > g["version"]:
+        # Numeric: '9.10.x' is newer than '9.8.x' but sorts below it as a string.
+        if db_manager.version_tuple(img.get("version", "")) > db_manager.version_tuple(g["version"]):
             g["version"] = img["version"]
         # Collect the distinct verdict reasons -- only meaningful for unsupported.
         r = redact((img.get("reason") or "").strip())
