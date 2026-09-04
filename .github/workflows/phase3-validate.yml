@@ -101,20 +101,31 @@ jobs:
           REPO="https://github.com/Azure/azfiles-lisa.git"
           REF="${LISA_REF:-main}"
 
-          WANT=$(git ls-remote "$REPO" "refs/heads/$REF" | cut -f1)
-          [ -n "$WANT" ] || WANT="$REF"          # REF was already a SHA
+          # A bare runner may not have git yet; setup_lisa.sh installs it. Only
+          # ask upstream where main points when we can -- otherwise bootstrap
+          # first and read back whatever pip ended up installing.
+          WANT=""
+          if command -v git >/dev/null 2>&1; then
+            WANT=$(git ls-remote "$REPO" "refs/heads/$REF" | cut -f1)
+            [ -n "$WANT" ] || WANT="$REF"        # REF was already a SHA
+          fi
           HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
 
-          if "$VENV/bin/lisa" --help >/dev/null 2>&1 && [[ "$HAVE" == *"$WANT"* ]]; then
+          if [ -n "$WANT" ] && "$VENV/bin/lisa" --help >/dev/null 2>&1 \
+             && [[ "$HAVE" == *"$WANT"* ]]; then
             echo "LISA engine up to date at $WANT"
           else
             # Say what moved. If today's run fails and the engine changed, that
             # is the first thing to suspect -- otherwise an upstream regression
             # is indistinguishable from an AzNFS one.
-            echo "::notice::LISA engine changing to $WANT (was: ${HAVE:-not installed})"
+            echo "::notice::LISA engine changing to ${WANT:-upstream $REF} (was: ${HAVE:-not installed})"
             LISA_VENV="$VENV" LISA_REF="$REF" bash phase3/setup_lisa.sh
+            HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
           fi
-          echo "LISA_ENGINE_SHA=$WANT" >> "$GITHUB_ENV"
+          # Record what is installed, not what we hoped for.
+          [ -n "$WANT" ] || WANT=$(printf '%s' "$HAVE" |
+            sed -n 's/.*@\([0-9a-f]\{7,40\}\).*/\1/p')
+          echo "LISA_ENGINE_SHA=${WANT:-unknown}" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
       # 5. Run the Phase 3 driver: per-distro LISA validation, then record

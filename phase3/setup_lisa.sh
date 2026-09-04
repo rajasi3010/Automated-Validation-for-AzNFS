@@ -6,12 +6,11 @@
 # `lisa run`:
 #
 #   1. system build deps (apt)               -- needs sudo; skipped if missing
-#   2. the LISA engine, pip-installed from the pinned commit (no checkout)
-#   3. a Python venv at LISA_VENV            -- created if absent
-#   4. the `lisa` CLI available in that venv
-#   5. the project's own requirements        -- so the in-venv driver + ACS
+#   2. a Python venv at LISA_VENV            -- created if absent
+#   3. the LISA engine, pip-installed from the resolved commit (no checkout)
+#   4. the project's own requirements        -- so the in-venv driver + ACS
 #                                               e-mail notifier work too
-#   6. a smoke check                         -- `lisa --help` resolves
+#   5. a smoke check                         -- `lisa --help` resolves
 #
 # Re-runnable: reinstalling is idempotent, existing venv reused. Override any of the
 # paths/refs via env vars (defaults match the workflow's LISA_VENV default).
@@ -66,7 +65,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Python venv.
+# 2. Python venv.
 # ---------------------------------------------------------------------------
 log "venv -> $LISA_VENV"
 if [ ! -x "$LISA_VENV/bin/python" ]; then
@@ -77,7 +76,8 @@ source "$LISA_VENV/bin/activate"
 python -m pip install --upgrade pip wheel
 
 # ---------------------------------------------------------------------------
-# 4. LISA engine (editable, azure extra only -- NOT libvirt).
+# 3. LISA engine: azure extra only (NOT libvirt), installed as an ordinary
+#    package from a resolved commit -- not editable, no checkout left behind.
 # ---------------------------------------------------------------------------
 log "pip install LISA ($LISA_REPO @ $LISA_REF)"
 # Resolve a branch to the commit it points at RIGHT NOW and install that, so the
@@ -95,7 +95,7 @@ fi
 pip install --upgrade "mslisa[azure] @ git+${LISA_REPO}@${LISA_SHA}"
 
 # ---------------------------------------------------------------------------
-# 5. Project requirements (the driver runs in THIS venv and lazily imports the
+# 4. Project requirements (the driver runs in THIS venv and lazily imports the
 #    Phase 1 ACS notifier, which needs azure-communication-email etc.).
 # ---------------------------------------------------------------------------
 if [ -f "$REQUIREMENTS" ]; then
@@ -106,7 +106,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Smoke check.
+# 5. Smoke check.
 # ---------------------------------------------------------------------------
 log "verify"
 lisa --help >/dev/null 2>&1 && echo "OK: lisa CLI resolves in $LISA_VENV"
