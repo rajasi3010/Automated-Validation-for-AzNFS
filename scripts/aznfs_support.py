@@ -18,6 +18,7 @@ PUBLISH_TARGETS = {
     "Rocky": {"8.0", "9.0"},
     "SUSE": {"15", "16"},
     "Debian": {"13"},
+    "Azure Linux": {"3.0"},
 }
 
 
@@ -42,6 +43,7 @@ SUPPORTED_RHEL = _accepted_versions("RHEL")       # {"7", "7.0", "7.3", "8", "8.
 SUPPORTED_ROCKY = _accepted_versions("Rocky")     # {"8", "8.0", "9", "9.0"}
 SUPPORTED_SLES = _accepted_versions("SUSE")       # {"15", "16"}
 SUPPORTED_DEBIAN = _accepted_versions("Debian")   # {"13"}
+SUPPORTED_AZURELINUX = _accepted_versions("Azure Linux")  # {"3", "3.0"}
 
 OUT_OF_MATRIX_REASON = "outside the AzNFS support matrix"
 
@@ -75,6 +77,8 @@ def is_supported_distro(label: str) -> bool:
         return ver in SUPPORTED_UBUNTU
     if "debian" in s:
         return ver in SUPPORTED_DEBIAN
+    if "azure linux" in s or "azurelinux" in s:
+        return ver in SUPPORTED_AZURELINUX
     if "rhel" in s or "redhat" in s or "red hat" in s:
         return ver in SUPPORTED_RHEL
     if "rocky" in s:
