@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS images (
                                       -- re-checks its own cheap 'gate' verdicts every run so a stale or
                                       -- transient known_unsupported self-heals, but leaves 'lisa'
                                       -- verdicts alone so a failing distro is not re-provisioned daily.
+                                      -- Also holds 'probe_error', which is NOT a verdict: it means the
+                                      -- last check could not reach PMC, so `validated` was left as it
+                                      -- was and the row is retried next run. Any real verdict clears it.
     UNIQUE(publisher, image, sku, region, architecture)
 );
 

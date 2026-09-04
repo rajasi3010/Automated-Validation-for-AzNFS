@@ -246,6 +246,9 @@ def set_validation_state(
     ``verdict_source`` records which phase decided: 'gate' (Phase 2) or 'lisa'
     (Phase 3). Phase 2 re-checks its own 'gate' verdicts on later runs; 'lisa'
     verdicts are left alone so a failing distro is not re-provisioned daily.
+    The column also carries 'probe_error' (set by :func:`mark_probe_failed`),
+    which is not a verdict at all -- see that function. Writing any real verdict
+    here clears it.
 
     Returns True if a row was updated, False if no matching row exists.
     """
