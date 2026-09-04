@@ -21,6 +21,10 @@ on:
         description: "One-time: feed ALL unvalidated distros (the backlog) to Phase 2/3, not just the new delta"
         type: boolean
         default: false
+      full_revalidation:
+        description: "One-time: FORGET every verdict and re-validate the whole fleet from scratch (implies emit_backlog)"
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -77,17 +81,20 @@ jobs:
           AZURE_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}
           ACS_ENDPOINT: ${{ vars.ACS_ENDPOINT }}
           ACS_SENDER: ${{ vars.ACS_SENDER }}
-          # One-shot backlog feed. Source from the repo variable (so it applies
-          # to the scheduled run too) or the manual-dispatch input. The scanner
-          # self-disables after one emit via a DB one-shot token, so a forgotten
-          # variable will NOT keep re-provisioning Phase 3 VMs.
-          EMIT_BACKLOG: ${{ vars.EMIT_BACKLOG || inputs.emit_backlog }}
-          # One-shot FULL re-validation: when set to a NEW token, resets every
-          # tracked distro's verdict back to 'unknown' once (keeping any
-          # pending_validation rows) so the WHOLE fleet re-runs through Phase
-          # 2/3. Pair with EMIT_BACKLOG to actually emit them. Self-disables
-          # after one run via a DB token, like EMIT_BACKLOG.
-          RESET_VALIDATION: ${{ vars.RESET_VALIDATION }}
+          # One-shot backlog feed. A ticked checkbox becomes a token unique to
+          # this run, so the box works EVERY time -- a fixed value like "true"
+          # is consumed once and then silently ignored for ever after. Falls back
+          # to the repo variable so the scheduled run can be armed too. The
+          # scanner self-disables after one emit via a DB one-shot token, so a
+          # forgotten variable will NOT keep re-provisioning Phase 3 VMs.
+          EMIT_BACKLOG: ${{ (inputs.emit_backlog || inputs.full_revalidation) && format('manual-{0}', github.run_id) || vars.EMIT_BACKLOG }}
+          # One-shot FULL re-validation: clears every tracked distro's verdict
+          # back to 'unknown' once (keeping any pending_validation rows a
+          # concurrent Phase 3 owns) so the WHOLE fleet re-runs through Phase
+          # 2/3, exactly like a first run. Ticking full_revalidation arms this
+          # AND the backlog feed above, because a reset alone only marks rows
+          # unknown -- the backlog is what actually hands them to Phase 2.
+          RESET_VALIDATION: ${{ inputs.full_revalidation && format('manual-{0}', github.run_id) || vars.RESET_VALIDATION }}
         run: |
           cd scripts
           set +e
