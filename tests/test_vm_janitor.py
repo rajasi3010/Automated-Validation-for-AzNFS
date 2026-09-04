@@ -53,17 +53,17 @@ def test_dry_run_deletes_nothing(monkeypatch):
 
 
 def test_sweep_deletes_vms_then_their_orphans(monkeypatch):
-    # Order matters: a disk or NIC cannot be removed while its VM still holds it.
+    # Order matters twice over: a disk or NIC cannot be removed while its VM
+    # holds it, and a private endpoint's NIC cannot be removed at all until the
+    # endpoint is gone (Azure rejects it with NicInUseWithPrivateEndpoint).
     seen = []
 
     def fake_az(*args):
         seen.append(args[:3])
         if args[:2] == ("vm", "list"):
             return [_vm("old", "2026-08-26T11:35:24+00:00")] if len(seen) == 1 else []
-        if args[:2] in (("network", "nic"), ("network", "public-ip")) and args[2] == "list":
+        if "list" in args[:3]:
             return ["/id/one"]
-        if args[:2] == ("disk", "list") or args[:3] == ("storage", "account", "list"):
-            return ["/id/two"]
         return None
 
     monkeypatch.setattr(vm_janitor, "_az", fake_az)
@@ -71,8 +71,29 @@ def test_sweep_deletes_vms_then_their_orphans(monkeypatch):
 
     assert result["deleted_vms"] == 1
     assert result["remaining"] == 0
-    assert result["orphans"] == {"nics": 1, "public_ips": 1, "disks": 1, "storage": 1}
-    assert seen.index(("vm", "delete", "--yes")) < seen.index(("network", "nic", "list"))
+    assert result["failures"] == 0
+    assert seen.index(("vm", "delete", "--yes")) < seen.index(("network", "private-endpoint", "list"))
+    assert (seen.index(("network", "private-endpoint", "delete"))
+            < seen.index(("network", "nic", "list")))
+
+
+def test_one_stubborn_resource_does_not_abandon_the_sweep(monkeypatch):
+    # A single failure used to abort everything, leaving 106 disks and IPs.
+    def fake_az(*args):
+        if args[:2] == ("vm", "list"):
+            return []
+        if "list" in args[:3]:
+            return ["/id/one"]
+        if args[:3] == ("network", "nic", "delete"):
+            raise RuntimeError("NicInUseWithPrivateEndpoint")
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    result = vm_janitor.sweep("rg", 0)
+
+    assert result["failures"] == 1
+    assert result["orphans"]["disks"] == 1        # reached despite the NIC failure
+    assert result["orphans"]["storage"] == 1
 
 
 def test_survivors_raise_an_alert(monkeypatch):

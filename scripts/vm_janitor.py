@@ -71,39 +71,62 @@ def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
     return sorted(keep, key=lambda v: v.get("created") or "")
 
 
-def _delete_orphans(resource_group: str) -> dict[str, int]:
-    """Remove the NICs, public IPs, disks and storage accounts left behind.
+def _delete_each(kind: str, ids: list[str], *cmd: str) -> tuple[int, int]:
+    """Delete resources one at a time, surviving individual failures.
 
-    Only ever touches resources that are already detached, so it cannot take
-    anything out from under a running VM.
+    A single stubborn resource must not abandon the rest of the sweep -- that is
+    how one private-endpoint NIC left 106 disks and public IPs behind.
     """
-    removed = {"nics": 0, "public_ips": 0, "disks": 0, "storage": 0}
+    ok = failed = 0
+    for resource_id in ids:
+        try:
+            _az(*cmd, "--ids", resource_id)
+            ok += 1
+        except Exception as exc:  # noqa: BLE001 - report and keep going
+            failed += 1
+            logger.warning("Could not delete %s %s: %s", kind, resource_id.split("/")[-1], exc)
+    return ok, failed
+
+
+def _delete_orphans(resource_group: str) -> tuple[dict[str, int], int]:
+    """Remove what the VMs leave behind, in dependency order.
+
+    Private endpoints go FIRST: their NIC cannot be deleted on its own (Azure
+    rejects it with NicInUseWithPrivateEndpoint) and disappears with the
+    endpoint. Everything else is only touched once already detached, so this
+    cannot take anything out from under a running VM.
+    """
+    removed = {"private_endpoints": 0, "nics": 0, "public_ips": 0, "disks": 0, "storage": 0}
+    failures = 0
+
+    endpoints = _az("network", "private-endpoint", "list", "-g", resource_group,
+                    "--query", "[].id") or []
+    removed["private_endpoints"], f = _delete_each(
+        "private endpoint", endpoints, "network", "private-endpoint", "delete")
+    failures += f
 
     nics = _az("network", "nic", "list", "-g", resource_group,
                "--query", "[?virtualMachine==null].id") or []
-    for nic_id in nics:
-        _az("network", "nic", "delete", "--ids", nic_id)
-        removed["nics"] += 1
+    removed["nics"], f = _delete_each("nic", nics, "network", "nic", "delete")
+    failures += f
 
     ips = _az("network", "public-ip", "list", "-g", resource_group,
               "--query", "[?ipConfiguration==null].id") or []
-    for ip_id in ips:
-        _az("network", "public-ip", "delete", "--ids", ip_id)
-        removed["public_ips"] += 1
+    removed["public_ips"], f = _delete_each("public ip", ips, "network", "public-ip", "delete")
+    failures += f
 
     disks = _az("disk", "list", "-g", resource_group,
                 "--query", "[?diskState=='Unattached'].id") or []
-    for disk_id in disks:
-        _az("disk", "delete", "--ids", disk_id, "--yes")
-        removed["disks"] += 1
+    removed["disks"], f = _delete_each("disk", disks, "disk", "delete", "--yes")
+    failures += f
 
     accounts = _az("storage", "account", "list", "-g", resource_group,
                    "--query", f"[?starts_with(name, '{STORAGE_PREFIX}')].id") or []
-    for account_id in accounts:
-        _az("storage", "account", "delete", "--ids", account_id, "--yes")
-        removed["storage"] += 1
+    removed["storage"], f = _delete_each(
+        "storage account", accounts, "storage", "account", "delete", "--yes")
+    failures += f
 
-    return removed
+    return removed, failures
 
 
 def sweep(resource_group: str, older_than_hours: float,
@@ -115,17 +138,18 @@ def sweep(resource_group: str, older_than_hours: float,
     if dry_run:
         for vm in victims:
             logger.info("  would delete %s (created %s)", vm["name"], vm.get("created"))
-        return {"deleted_vms": 0, "eligible": len(victims), "orphans": {}, "remaining": len(victims)}
+        return {"deleted_vms": 0, "eligible": len(victims), "orphans": {},
+                "failures": 0, "remaining": len(victims)}
 
     if victims:
         # One call so the deletions run in parallel and we wait for all of them;
         # the disks and NICs cannot be removed until their VM is gone.
         _az("vm", "delete", "--yes", "--ids", *[vm["id"] for vm in victims])
 
-    orphans = _delete_orphans(resource_group)
+    orphans, failures = _delete_orphans(resource_group)
     remaining = len(_az("vm", "list", "-g", resource_group, "--query", "[].name") or [])
     return {"deleted_vms": len(victims), "eligible": len(victims),
-            "orphans": orphans, "remaining": remaining}
+            "orphans": orphans, "failures": failures, "remaining": remaining}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,11 +173,13 @@ def main(argv: list[str] | None = None) -> int:
             _alert(args.resource_group, f"the sweep itself failed: {exc}")
         return 1
 
-    logger.info("Deleted %d VM(s); orphans removed: %s; %d VM(s) remain",
-                result["deleted_vms"], result["orphans"], result["remaining"])
-    if args.alert and result["remaining"]:
+    logger.info("Deleted %d VM(s); orphans removed: %s; %d failure(s); %d VM(s) remain",
+                result["deleted_vms"], result["orphans"],
+                result.get("failures", 0), result["remaining"])
+    if args.alert and (result["remaining"] or result.get("failures")):
         _alert(args.resource_group,
-               f"{result['remaining']} VM(s) still present after the sweep")
+               f"{result['remaining']} VM(s) still present and "
+               f"{result.get('failures', 0)} resource(s) could not be deleted")
     return 0
 
 
