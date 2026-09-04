@@ -130,13 +130,22 @@ class FakeNotifierMod:
 
 class FakeDbMod:
     def __init__(self, matched=True, records=None, pending=None, supported=None,
-                 unsupported=None):
+                 unsupported=None, probe_failed=None):
         self.calls = []
         self.matched = matched
         self.records = records or {}     # identity tuple -> row dict
         self.pending = pending or []     # rows currently pending_publish
         self.supported = supported or [] # rows currently known_supported
         self.unsupported = unsupported or []  # rows currently known_unsupported
+        self.probe_failed = probe_failed or []  # rows flagged "PMC unreachable"
+        self.marked: list[tuple] = []
+
+    def mark_probe_failed(self, db_path, identity):
+        self.marked.append(identity)
+        return True
+
+    def get_rows_by_verdict_source(self, db_path, source):
+        return list(self.probe_failed) if source == "probe_error" else []
 
     def set_validation_state(self, db_path, identity, state, last_validated_version=None,
                              reason=None, verdict_source=None):
@@ -536,3 +545,51 @@ def test_unsupported_refeed_keeps_one_rep_per_distro_and_arch():
     out = run.enrich_and_merge([], db, "db")
 
     assert [r["sku"] for r in out] == ["minimal"]  # newest marketplace version wins
+
+
+def _probe_row(sku="server", label="Ubuntu 24.04", validated="unknown"):
+    return {"publisher": "Canonical", "image": "ubuntu-24_04-lts", "sku": sku,
+            "region": "eastus", "architecture": "x86_64", "family": "apt",
+            "distro_label": label, "version": "24.04.1", "validated": validated,
+            "verdict_source": "probe_error"}
+
+
+def test_a_row_flagged_probe_error_is_retried():
+    # Nothing else re-feeds `unknown`, so without the marker a release stranded
+    # by one unreachable run would wait for its image to change.
+    db = FakeDbMod(probe_failed=[_probe_row()])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert [r["sku"] for r in out] == ["server"]
+
+
+def test_probe_error_retry_keeps_the_untouched_verdict():
+    # The marker does not overwrite `validated`, so a previously supported row
+    # is re-fed still tagged supported and cannot be silently downgraded.
+    db = FakeDbMod(probe_failed=[_probe_row(validated="known_supported")])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert out[0]["_db_state"] == "known_supported"
+
+
+def test_probe_error_retry_honours_the_exclusion_policy():
+    row = _probe_row()
+    row["image"] = "0001-com-ubuntu-pro-advanced-sla"
+    db = FakeDbMod(probe_failed=[row])
+
+    assert run.enrich_and_merge([], db, "db") == []
+
+
+def test_probe_error_retry_is_deduped_against_the_handoff():
+    # Phase 1 re-emitting the same image must not queue it twice.
+    row = _probe_row()
+    entry = _entry(sku="server", distro_label="Ubuntu 24.04")
+    entry.update({"publisher": row["publisher"], "image": row["image"],
+                  "region": row["region"], "architecture": row["architecture"]})
+    db = FakeDbMod(probe_failed=[row])
+
+    out = run.enrich_and_merge([entry], db, "db")
+
+    assert len(out) == 1

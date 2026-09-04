@@ -89,6 +89,10 @@ class Phase1DbAdapter:
         if not updated:
             logger.warning("No DB row matched identity %s (state=%s)", identity, state)
 
+    def mark_probe_failed(self, identity) -> None:
+        if not self._db.mark_probe_failed(self._path, identity):
+            logger.warning("No DB row matched identity %s (probe failure)", identity)
+
 
 # ---------------------------------------------------------------------------
 # I/O helpers
@@ -166,6 +170,8 @@ def entries_from_db(
 # distro is not re-provisioned daily; reset it explicitly to re-test.
 _SKIP_STATES = frozenset({"pending_validation"})
 _LISA_VERDICT = "lisa"
+# Not a verdict: set when PMC could not be reached, cleared by any real verdict.
+_PROBE_ERROR = "probe_error"
 
 
 def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -323,6 +329,23 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 continue
             seen.add(ident)
             out.append({**row, "_db_state": "known_unsupported"})
+
+        # Rows whose last check could not reach PMC. They carry no verdict --
+        # only the marker -- and `unknown` rows are not re-fed by anything else,
+        # so without this a release stranded by one unreachable run would wait
+        # for Phase 1 to re-emit its image, which only happens when it changes.
+        for row in db_mod.get_rows_by_verdict_source(db_path, _PROBE_ERROR):
+            if _excluded(row):
+                continue
+            ident = (
+                row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
+                row.get("region", ""), row.get("architecture", ""),
+            )
+            if ident in seen:
+                continue
+            seen.add(ident)
+            logger.info("Retrying %s: last check could not reach PMC", ident)
+            out.append({**row, "_db_state": row.get("validated") or None})
     except Exception:  # pragma: no cover - re-check is best-effort
         logger.exception("known_supported re-check re-feed skipped")
 

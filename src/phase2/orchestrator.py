@@ -59,6 +59,8 @@ class DbLike(Protocol):
         verdict_source: str | None = None,
     ) -> None: ...
 
+    def mark_probe_failed(self, identity: tuple[str, str, str, str, str]) -> None: ...
+
 
 class NotifierLike(Protocol):
     """Phase 2 emits a single end-of-run summary; there are no per-distro mails.
@@ -523,8 +525,13 @@ def run_phase2(
         try:
             result = process_entry(e, prod, db)
         except pmc_packages.ProbeError as exc:
-            # PMC unreachable proves nothing: leave the stored verdict alone.
+            # PMC unreachable proves nothing: leave the stored verdict alone and
+            # only flag the row, so exactly these are retried on the next run.
             logger.warning("PMC unreachable while checking %s: %s", label, exc)
+            try:
+                db.mark_probe_failed(_identity(e))
+            except Exception:  # pragma: no cover - marking is best-effort
+                logger.exception("Could not flag %s for retry", label)
             errors.append((label, f"PMC unreachable, verdict left unchanged: {exc}"))
             continue
         except Exception as exc:  # one image's failure never aborts the run

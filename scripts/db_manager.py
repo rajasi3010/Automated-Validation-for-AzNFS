@@ -31,6 +31,10 @@ _VALID_STATES = {
     KNOWN_SUPPORTED, KNOWN_UNSUPPORTED, PENDING_PUBLISH, PENDING_VALIDATION, UNKNOWN,
 }
 
+# verdict_source value meaning "the last check could not reach PMC". Not a
+# verdict: it leaves `validated` alone and only marks the row for a retry.
+PROBE_ERROR = "probe_error"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -377,6 +381,48 @@ def get_rows_by_state(db_path: str, state: str) -> list[dict]:
             (state,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_rows_by_verdict_source(db_path: str, source: str) -> list[dict]:
+    """Return all image rows whose ``verdict_source`` is ``source``.
+
+    Phase 2 uses this with 'probe_error' to find the rows whose last check could
+    not reach PMC, so exactly those are retried on the next run.
+    """
+    conn = _connect(db_path)
+    try:
+        _lazy_migrate(conn)
+        rows = conn.execute(
+            "SELECT * FROM images WHERE verdict_source = ? "
+            "ORDER BY publisher, distro_label, sku",
+            (source,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_probe_failed(db_path: str, identity: tuple[str, str, str, str, str]) -> bool:
+    """Flag a row as "PMC was unreachable", WITHOUT touching its verdict.
+
+    An unreachable PMC proves nothing, so ``validated`` is deliberately left as
+    it was; only ``verdict_source`` is set, which is what makes the row eligible
+    for a retry next run. Any later real verdict overwrites the marker.
+    """
+    publisher, image, sku, region, architecture = identity
+    conn = _connect(db_path)
+    try:
+        _lazy_migrate(conn)
+        cur = conn.execute(
+            "UPDATE images SET verdict_source = ?, last_checked = ? "
+            "WHERE publisher = ? AND image = ? AND sku = ? AND region = ? "
+            "AND architecture = ?",
+            (PROBE_ERROR, _now_iso(), publisher, image, sku, region, architecture),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
