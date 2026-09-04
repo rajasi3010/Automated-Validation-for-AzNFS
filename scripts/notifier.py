@@ -9,6 +9,7 @@ from azure.communication.email import EmailClient
 from azure.identity import DefaultAzureCredential
 
 import config
+import status_rollup
 
 logger = logging.getLogger(__name__)
 
@@ -153,10 +154,12 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
 def _sku_list_html(skus: list[dict]) -> str:
     """The exact images behind a distro row, so a failure points at one SKU."""
     items = ""
-    for s in skus:
-        label = f"{s.get('image', '')}/{s.get('sku', '')} ({s.get('architecture', '')})"
-        reason = f" &mdash; {html.escape(s['reason'])}" if s.get("reason") else ""
-        items += f"<li><code>{html.escape(label)}</code>{reason}</li>"
+    for reason, group in status_rollup.group_skus_by_reason(skus):
+        labels = ", ".join(
+            f"<code>{html.escape(status_rollup.sku_label(s))}</code>" for s in group
+        )
+        tail = f" &mdash; {html.escape(reason)}" if reason else ""
+        items += f"<li>{labels}{tail}</li>"
     return f"<ul style='margin:2px 0;padding-left:16px'>{items}</ul>"
 
 
@@ -213,12 +216,11 @@ def send_monthly_reminder(
                 # Name the exact images that failed: a distro release covers very
                 # different SKUs (server, minimal, cvm, pro, arm64).
                 if st == "known_unsupported":
-                    for s in d.get("skus", []):
-                        sku_line = (f"      * {s.get('image')}/{s.get('sku')} "
-                                    f"({s.get('architecture')})")
-                        if s.get("reason"):
-                            sku_line += f" -- {s['reason']}"
-                        plain_parts.append(sku_line)
+                    for reason, group in status_rollup.group_skus_by_reason(d.get("skus", [])):
+                        for s in group:
+                            plain_parts.append(f"      * {status_rollup.sku_label(s)}")
+                        if reason:
+                            plain_parts.append(f"        -- {reason}")
         else:
             plain_parts.append("  (none)")
         plain_parts.append("")

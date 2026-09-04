@@ -122,24 +122,24 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
                 line += f" -- {row['reason']}"
             lines.append(line)
             if state == "known_unsupported":
-                for s in row.get("skus", []):
-                    sku_line = f"      * {s.get('image')}/{s.get('sku')} ({s.get('architecture')})"
-                    if s.get("reason"):
-                        sku_line += f" -- {s['reason']}"
-                    lines.append(sku_line)
+                for reason, group in status_rollup.group_skus_by_reason(row.get("skus", [])):
+                    for s in group:
+                        lines.append(f"      * {status_rollup.sku_label(s)}")
+                    if reason:
+                        lines.append(f"        -- {reason}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _sku_cell(row: dict) -> str:
-    """Failing images for one distro, one per line inside a Markdown table cell."""
+    """Failing images for one distro, grouped so a shared reason is stated once."""
     skus = row.get("skus") or []
     if not skus:
         return row.get("reason") or "-"
     parts = []
-    for s in skus:
-        label = f"`{s.get('image')}/{s.get('sku')}` ({s.get('architecture')})"
-        parts.append(f"{label} — {s['reason']}" if s.get("reason") else label)
+    for reason, group in status_rollup.group_skus_by_reason(skus):
+        labels = ", ".join(f"`{status_rollup.sku_label(s)}`" for s in group)
+        parts.append(f"{labels} — {reason}" if reason else labels)
     return "<br>".join(parts)
 
 

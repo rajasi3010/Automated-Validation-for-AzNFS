@@ -5,6 +5,8 @@ import os
 os.environ.setdefault("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
 
 import notifier
+import query_status
+import status_rollup
 from status_rollup import buckets_by_state
 
 
@@ -78,3 +80,37 @@ def test_supported_bucket_is_not_padded_with_sku_lists():
     notifier.send_monthly_reminder(buckets, recipients=["someone@example.com"])
 
     assert "ubuntu-22_04-lts/server" not in sent["plain"]
+
+
+def test_skus_sharing_a_reason_are_listed_once_with_it():
+    # Whole releases usually fail identically; repeating a 70-char reason per
+    # SKU buries the one thing that matters -- which images are affected.
+    skus = [
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-arm", "architecture": "arm64", "reason": "repo missing"},
+    ]
+
+    grouped = status_rollup.group_skus_by_reason(skus)
+
+    assert [r for r, _ in grouped] == ["no packages", "repo missing"]
+    assert [len(g) for _, g in grouped] == [2, 1]
+
+
+def test_markdown_cell_states_a_shared_reason_once():
+    row = {"skus": [
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+    ]}
+
+    cell = query_status._sku_cell(row)
+
+    assert cell.count("no packages") == 1
+    assert "`debian-11-daily/11 (x86_64)`" in cell
+    assert "`debian-11-daily/11-gen2 (x86_64)`" in cell
+
+
+def test_skus_with_no_reason_are_listed_without_a_dash():
+    row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64", "reason": ""}]}
+
+    assert query_status._sku_cell(row) == "`img/s (x86_64)`"

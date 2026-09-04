@@ -54,6 +54,24 @@ def exclude_distros(records: list[dict], prefixes: list[str]) -> list[dict]:
     return kept
 
 
+def sku_label(sku: dict) -> str:
+    """One image identified the way the reports show it: ``offer/sku (arch)``."""
+    return f"{sku.get('image', '')}/{sku.get('sku', '')} ({sku.get('architecture', '')})"
+
+
+def group_skus_by_reason(skus: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Collapse SKUs that failed identically, so the reason is stated once.
+
+    Whole releases usually fail the same way (every Debian 11 image missing the
+    same package), and repeating a 70-character reason per SKU buries the one
+    thing the reader needs: which images are affected.
+    """
+    groups: dict[str, list[dict]] = {}
+    for s in skus:
+        groups.setdefault(s.get("reason", "") or "", []).append(s)
+    return sorted(groups.items(), key=lambda kv: kv[0])
+
+
 def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
     """Group tracked images into per-validation-state buckets for the monthly reminder.
 
