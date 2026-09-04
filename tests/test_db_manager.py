@@ -84,3 +84,38 @@ def test_upsert_sees_a_rolling_minor_as_an_update(tmp_path):
 
     row = db_manager.get_image_record(db, "RedHat", "RHEL", "9-lvm", "eastus", "x86_64")
     assert row["version"] == "9.10.2026062413"
+
+
+def test_reset_clears_every_trace_of_the_old_verdict(tmp_path):
+    # A reset must leave the row indistinguishable from a first scan, or Gate 3
+    # can trust a stale marker and Phase 2 can skip on a stale verdict_source.
+    db = str(tmp_path / "m.db")
+    db_manager.initialize(db, "db/schema.sql")
+    db_manager.check_and_upsert(db, "RedHat", "RHEL", "9-lvm", "9.0.1", "eastus",
+                                "x86_64", "yum", "RHEL 9.0")
+    ident = ("RedHat", "RHEL", "9-lvm", "eastus", "x86_64")
+    db_manager.set_validation_state(db, ident, "known_unsupported",
+                                    last_validated_version="0.3.458",
+                                    reason="prod repo is missing", verdict_source="lisa")
+
+    assert db_manager.reset_validation_to_unknown(db) == 1
+
+    row = db_manager.get_image_record(db, *ident)
+    assert row["validated"] == "unknown"
+    assert row["reason"] == ""
+    assert row["verdict_source"] == ""
+    assert row["last_validated_version"] == ""
+
+
+def test_reset_leaves_in_flight_rows_alone(tmp_path):
+    # A concurrent Phase 3 owns pending_validation rows; wiping them would
+    # let Phase 2 re-dispatch a VM that is already running.
+    db = str(tmp_path / "m.db")
+    db_manager.initialize(db, "db/schema.sql")
+    db_manager.check_and_upsert(db, "RedHat", "RHEL", "9-lvm", "9.0.1", "eastus",
+                                "x86_64", "yum", "RHEL 9.0")
+    ident = ("RedHat", "RHEL", "9-lvm", "eastus", "x86_64")
+    db_manager.set_validation_state(db, ident, "pending_validation")
+
+    assert db_manager.reset_validation_to_unknown(db, exclude_states=("pending_validation",)) == 0
+    assert db_manager.get_image_record(db, *ident)["validated"] == "pending_validation"

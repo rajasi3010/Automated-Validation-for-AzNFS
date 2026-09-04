@@ -344,15 +344,17 @@ def reset_validation_to_unknown(
     and ``last_regressed_version`` are ALL cleared so Phase 2's Gate 3 treats each
     as a first-time validation -- no stale regression marker survives a reset (a
     surviving marker would let Gate 3's ``known_bad`` path trust a row without a
-    LISA run). Rows whose current state is in ``exclude_states`` are left untouched
-    (e.g. keep 'pending_validation' rows that a concurrent Phase 3 may still be
-    working on).
+    LISA run). ``reason`` and ``verdict_source`` go too, so a reset row carries no
+    trace of the verdict it used to have. Rows whose current state is in
+    ``exclude_states`` are left untouched (e.g. keep 'pending_validation' rows
+    that a concurrent Phase 3 may still be working on).
 
     Returns the number of rows reset.
     """
     now = _now_iso()
     conn = _connect(db_path)
     try:
+        _lazy_migrate(conn)
         if exclude_states:
             placeholders = ",".join("?" for _ in exclude_states)
             cur = conn.execute(
@@ -362,6 +364,8 @@ def reset_validation_to_unknown(
                        last_validated_version       = '',
                        last_validated_image_version = '',
                        last_regressed_version       = '',
+                       reason                       = '',
+                       verdict_source               = '',
                        last_checked                 = ?
                  WHERE validated NOT IN ({placeholders})
                 """,
@@ -375,6 +379,8 @@ def reset_validation_to_unknown(
                        last_validated_version       = '',
                        last_validated_image_version = '',
                        last_regressed_version       = '',
+                       reason                       = '',
+                       verdict_source               = '',
                        last_checked                 = ?
                 """,
                 (now,),
