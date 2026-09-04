@@ -1,0 +1,5 @@
+# Code owners are auto-requested for review on every PR and their approval is
+# required by the branch protection rule on master.
+# Entries must be GitHub logins with write access to this repository.
+
+* @rajasi3010
