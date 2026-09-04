@@ -121,8 +121,26 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
             if state == "known_unsupported" and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
+            if state == "known_unsupported":
+                for reason, group in status_rollup.group_skus_by_reason(row.get("skus", [])):
+                    for s in group:
+                        lines.append(f"      * {status_rollup.sku_label(s)}")
+                    if reason:
+                        lines.append(f"        -- {reason}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _sku_cell(row: dict) -> str:
+    """Failing images for one distro, grouped so a shared reason is stated once."""
+    skus = row.get("skus") or []
+    if not skus:
+        return row.get("reason") or "-"
+    parts = []
+    for reason, group in status_rollup.group_skus_by_reason(skus):
+        labels = ", ".join(f"`{status_rollup.sku_label(s)}`" for s in group)
+        parts.append(f"{labels} — {reason}" if reason else labels)
+    return "<br>".join(parts)
 
 
 def render_markdown(buckets: dict[str, list[dict]]) -> str:
@@ -154,7 +172,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         header = "| Distro | Latest image version | Publishers | SKUs |"
         divider = "| --- | --- | --- | ---: |"
         if unsupported:
-            header += " Reason |"
+            header += " Failing SKUs |"
             divider += " --- |"
         out += [header, divider]
         for row in rows:
@@ -163,7 +181,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
             if unsupported:
-                line += f" {row.get('reason') or '-'} |"
+                line += f" {_sku_cell(row)} |"
             out.append(line)
         out.append("")
     return "\n".join(out).rstrip() + "\n"
