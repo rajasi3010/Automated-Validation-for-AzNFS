@@ -209,8 +209,9 @@ class ProdPackageIndex:
         # (an unset repo variable arrives as ''), which int('') would reject.
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         self._session = session or requests.Session()
-        # (aznfs dir url, filename) -> autoindex timestamp, filled by list_packages.
-        self._published_at: dict[tuple[str, str], datetime] = {}
+        # aznfs dir url -> {filename: autoindex timestamp}. Replaced wholesale on
+        # every listing so a directory's cache never outlives what it now serves.
+        self._published_at: dict[str, dict[str, datetime]] = {}
 
     def _ok(self, url: str) -> bool:
         try:
@@ -243,20 +244,24 @@ class ProdPackageIndex:
             resp = self._session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
             logger.warning("GET %s failed: %s", url, exc)
+            self._published_at.pop(url, None)
             return []
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
+            self._published_at.pop(url, None)
             return []
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
         names: list[str] = []
+        stamps: dict[str, datetime] = {}
         for href, stamp in _INDEX_ENTRY_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             try:
-                self._published_at[(url, name)] = datetime.strptime(
+                stamps[name] = datetime.strptime(
                     stamp, "%d-%b-%Y %H:%M").replace(tzinfo=timezone.utc)
             except ValueError:
                 logger.debug("Unparseable PMC timestamp %r for %s", stamp, name)
+        self._published_at[url] = stamps
         for href in _HREF_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             if name.lower().startswith("aznfs") and name.lower().endswith(ext):
@@ -273,7 +278,7 @@ class ProdPackageIndex:
         autoindex is the only place PMC exposes a publication time.
         """
         url = aznfs_dir_url(distro, version, family, self.base_url)
-        return self._published_at.get((url, filename))
+        return self._published_at.get(url, {}).get(filename)
 
     def ping(self) -> bool:
         """Lightweight reachability probe (used by pre-flight if wired)."""

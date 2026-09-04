@@ -270,3 +270,39 @@ def test_published_at_is_none_when_the_index_has_no_dates():
     idx.list_packages("rhel", "9", "yum")
 
     assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.2-1.x86_64.rpm") is None
+
+
+class _SwitchingSession:
+    """Serves a different page for the same URL on each call."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.requested = []
+
+    def get(self, url, timeout=None):
+        self.requested.append(url)
+        return self.pages.pop(0) if self.pages else _Resp("", 404)
+
+
+def test_a_relisting_without_dates_clears_the_old_timestamps():
+    # If the index stops publishing the date column, the previous run's
+    # timestamps must not linger -- ordering has to fall back to version order.
+    url = aznfs_dir_url("rhel", "9", "yum", BASE)
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp(YUM_HTML_WITH_AZNFS)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is not None
+
+    idx.list_packages("rhel", "9", "yum")
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+def test_a_vanished_directory_clears_its_timestamps():
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 404)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
