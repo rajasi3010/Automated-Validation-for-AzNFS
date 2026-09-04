@@ -3,11 +3,22 @@ from __future__ import annotations
 import aznfs_support as m
 
 
-def test_matrix_matches_the_aznfs_supported_list():
-    assert m.SUPPORTED_UBUNTU == {"18.04", "20.04", "22.04", "24.04", "26.04"}
+def test_publish_targets_mirror_packages_csv():
+    # Column 1 of AZNFS-mount/packages.csv, minus the EOL CentOS entries.
+    assert m.PUBLISH_TARGETS == {
+        "Ubuntu": {"18.04", "20.04", "22.04", "24.04", "26.04"},
+        "RHEL": {"7.0", "7.3", "8.0", "9.0", "10.0"},
+        "Rocky": {"8.0", "9.0"},
+        "SUSE": {"15", "16"},
+    }
+
+
+def test_rhel_and_rocky_match_on_the_major():
+    # AzNFS publishes RHEL-8.0 but the repo serves every 8.x, so 8.1 is in scope.
     assert m.SUPPORTED_RHEL == {"7", "8", "9", "10"}
     assert m.SUPPORTED_ROCKY == {"8", "9"}
     assert m.SUPPORTED_SLES == {"15", "16"}
+    assert m.SUPPORTED_UBUNTU == {"18.04", "20.04", "22.04", "24.04", "26.04"}
 
 
 def test_releases_inside_the_matrix():

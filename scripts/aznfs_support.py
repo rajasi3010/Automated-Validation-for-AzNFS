@@ -1,19 +1,35 @@
 """The distro releases AzNFS targets - the single source of truth for scope.
 
+Mirrors the publish targets in AZNFS-mount/packages.csv, minus the EOL CentOS
+entries (CentOS-7.0 / CentOS-8.0), which Phase 1 drops upstream anyway.
+
 Anything outside this matrix is discovered and tracked, but never validated: a
 missing AzNFS package there is expected, not a finding. Keeping it here (rather
 than in ``src/phase2``) lets Phase 1's reporting and Phase 2's gates share one
 definition instead of drifting apart.
-
-Mirrors the supported list in the AZNFS-mount README.
 """
 
 import re
 
-SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
-SUPPORTED_RHEL = {"7", "8", "9", "10"}
-SUPPORTED_ROCKY = {"8", "9"}
-SUPPORTED_SLES = {"15", "16"}
+# packages.csv column 1, verbatim, so this can be diffed against the source.
+# RHEL and Rocky publish per minor (RHEL-8.0, Rocky-9.0) but the repo behind it
+# serves the whole major, so those families are matched on the major below.
+PUBLISH_TARGETS = {
+    "Ubuntu": {"18.04", "20.04", "22.04", "24.04", "26.04"},
+    "RHEL": {"7.0", "7.3", "8.0", "9.0", "10.0"},
+    "Rocky": {"8.0", "9.0"},
+    "SUSE": {"15", "16"},
+}
+
+
+def _majors(family: str) -> set[str]:
+    return {target.split(".")[0] for target in PUBLISH_TARGETS[family]}
+
+
+SUPPORTED_UBUNTU = set(PUBLISH_TARGETS["Ubuntu"])   # matched as major.minor
+SUPPORTED_RHEL = _majors("RHEL")                    # {"7", "8", "9", "10"}
+SUPPORTED_ROCKY = _majors("Rocky")                  # {"8", "9"}
+SUPPORTED_SLES = _majors("SUSE")                    # {"15", "16"}
 
 OUT_OF_MATRIX_REASON = "outside the AzNFS support matrix"
 
