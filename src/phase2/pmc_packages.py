@@ -5,9 +5,10 @@ no corp proxy). PMC prod is *version-indexed*::
 
     https://packages.microsoft.com/<distro>/<version>/prod/
 
-so the image's ``distro_label`` ("Ubuntu 22.04", "RHEL 9.8") maps straight to a
-URL with no codename (jammy/noble) lookup. RHEL only publishes a subset of minor
-versions, so the version is resolved with a ``major.minor`` -> ``major`` fallback.
+so the image's ``distro_label`` ("Ubuntu 22.04", "RHEL 9.0") maps straight to a
+URL with no codename (jammy/noble) lookup. An ``x`` / ``x.0`` release is served
+at both ``<major>`` and ``<major>.0``; every other release resolves only to
+itself, so rhel/8.1 never falls back to rhel/8.
 
 aznfs package directory layout (anonymous HTTP, autoindex pages):
   apt: {base}/<distro>/<version>/prod/pool/main/a/aznfs/   -> aznfs_<ver>_<arch>.deb
