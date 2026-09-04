@@ -35,10 +35,14 @@ variable:
   # Pinned to one pre-created RG (default below) so the runner identity only
   # needs Network/Storage Account/Virtual Machine Contributor on THIS RG, not
   # subscription-scope rights. A pinned RG shares one ARM deployment name + SSH
-  # key, so envs run SERIALLY (concurrency=1). Set empty to make LISA create a
-  # fresh RG per env (faster, parallel) -- but that needs sub-scope rights.
+  # key, so envs run SERIALLY (concurrency=1).
+  #
+  # EMPTY by default: LISA creates a fresh RG per environment and DELETES it at
+  # the end. Deleting the group is its only cleanup -- with an RG pinned here it
+  # skips deletion entirely (it must not destroy a group it did not create) and
+  # every VM it provisions survives the run.
   - name: resource_group_name
-    value: "lisa-aznfs-phase3"
+    value: ""
   - name: marketplace_image
     value: "RedHat:RHEL:9_5:latest"
   - name: vm_size
