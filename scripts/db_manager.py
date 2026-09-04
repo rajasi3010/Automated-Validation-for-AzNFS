@@ -31,6 +31,10 @@ _VALID_STATES = {
     KNOWN_SUPPORTED, KNOWN_UNSUPPORTED, PENDING_PUBLISH, PENDING_VALIDATION, UNKNOWN,
 }
 
+# verdict_source value meaning "the last check could not reach PMC". Not a
+# verdict: it leaves `validated` alone and only marks the row for a retry.
+PROBE_ERROR = "probe_error"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -62,6 +66,8 @@ def _lazy_migrate(conn: sqlite3.Connection) -> None:
         adds.append("ALTER TABLE images ADD COLUMN last_regressed_version TEXT NOT NULL DEFAULT ''")
     if "reason" not in cols:
         adds.append("ALTER TABLE images ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+    if "verdict_source" not in cols:
+        adds.append("ALTER TABLE images ADD COLUMN verdict_source TEXT NOT NULL DEFAULT ''")
     if adds:
         logger.warning(
             "Legacy schema detected — adding new columns. "
@@ -217,6 +223,7 @@ def set_validation_state(
     state: str,
     last_validated_version: str | None = None,
     reason: str | None = None,
+    verdict_source: str | None = None,
 ) -> bool:
     """Phase 2/3: update the validation verdict for one image row.
 
@@ -235,6 +242,13 @@ def set_validation_state(
     known_unsupported); pass "" to clear it on a known_supported verdict, or
     leave it None to preserve the stored value. It is surfaced in the monthly
     digest's known_unsupported table. All other Phase 1 columns are preserved.
+
+    ``verdict_source`` records which phase decided: 'gate' (Phase 2) or 'lisa'
+    (Phase 3). Phase 2 re-checks its own 'gate' verdicts on later runs; 'lisa'
+    verdicts are left alone so a failing distro is not re-provisioned daily.
+    The column also carries 'probe_error' (set by :func:`mark_probe_failed`),
+    which is not a verdict at all -- see that function. Writing any real verdict
+    here clears it.
 
     Returns True if a row was updated, False if no matching row exists.
     """
@@ -257,6 +271,9 @@ def set_validation_state(
         if reason is not None:
             set_cols.append("reason = ?")
             params.append(reason)
+        if verdict_source is not None:
+            set_cols.append("verdict_source = ?")
+            params.append(verdict_source)
         params.extend([publisher, image, sku, region, architecture])
         cur = conn.execute(
             f"""
@@ -367,6 +384,48 @@ def get_rows_by_state(db_path: str, state: str) -> list[dict]:
             (state,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_rows_by_verdict_source(db_path: str, source: str) -> list[dict]:
+    """Return all image rows whose ``verdict_source`` is ``source``.
+
+    Phase 2 uses this with 'probe_error' to find the rows whose last check could
+    not reach PMC, so exactly those are retried on the next run.
+    """
+    conn = _connect(db_path)
+    try:
+        _lazy_migrate(conn)
+        rows = conn.execute(
+            "SELECT * FROM images WHERE verdict_source = ? "
+            "ORDER BY publisher, distro_label, sku",
+            (source,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_probe_failed(db_path: str, identity: tuple[str, str, str, str, str]) -> bool:
+    """Flag a row as "PMC was unreachable", WITHOUT touching its verdict.
+
+    An unreachable PMC proves nothing, so ``validated`` is deliberately left as
+    it was; only ``verdict_source`` is set, which is what makes the row eligible
+    for a retry next run. Any later real verdict overwrites the marker.
+    """
+    publisher, image, sku, region, architecture = identity
+    conn = _connect(db_path)
+    try:
+        _lazy_migrate(conn)
+        cur = conn.execute(
+            "UPDATE images SET verdict_source = ?, last_checked = ? "
+            "WHERE publisher = ? AND image = ? AND sku = ? AND region = ? "
+            "AND architecture = ?",
+            (PROBE_ERROR, _now_iso(), publisher, image, sku, region, architecture),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 

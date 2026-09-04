@@ -82,12 +82,16 @@ class Phase1DbAdapter:
         self._db = db_mod
         self._path = db_path
 
-    def set_validation_state(self, identity, state, reason=None) -> None:
+    def set_validation_state(self, identity, state, reason=None, verdict_source=None) -> None:
         updated = self._db.set_validation_state(
-            self._path, identity, state, reason=reason
+            self._path, identity, state, reason=reason, verdict_source=verdict_source
         )
         if not updated:
             logger.warning("No DB row matched identity %s (state=%s)", identity, state)
+
+    def mark_probe_failed(self, identity) -> None:
+        if not self._db.mark_probe_failed(self._path, identity):
+            logger.warning("No DB row matched identity %s (probe failure)", identity)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +147,7 @@ def entries_from_db(
     for r in rows:
         key = (r.get("distro_label", ""), r.get("architecture", ""))
         cur = chosen.get(key)
-        if cur is None or (r.get("version", "") > cur.get("version", "")):
+        if cur is None or _is_newer_image(r, cur):
             chosen[key] = r
     return sorted(
         chosen.values(),
@@ -153,12 +157,31 @@ def entries_from_db(
 
 # DB ``validated`` states that Phase 2 must NOT re-process:
 #   pending_validation  -> a LISA job is already in flight at Phase 3
-#   known_unsupported   -> terminal verdict (reset explicitly to re-try)
 # ``known_supported`` is deliberately NOT skipped: it is re-fed below so Gate 3
 # can compare the current prod AzNFS version against last_validated_version and
 # re-validate when a newer package ships (an unchanged package stays trusted, no
 # VM). ``unknown`` (fresh from Phase 1) and re-queued ``pending_publish`` flow on.
-_SKIP_STATES = frozenset({"pending_validation", "known_unsupported"})
+#
+# ``known_unsupported`` is NOT terminal either: a verdict Phase 2 made itself
+# (verdict_source 'gate') is just a repo/package lookup, and it goes stale as
+# soon as AzNFS publishes for that distro -- or was never true, if PMC happened
+# to be unreachable that run. Those are re-checked every run and self-heal. Only
+# ``lisa`` verdicts (the suite actually failed on a VM) are skipped, so a broken
+# distro is not re-provisioned daily; reset it explicitly to re-test.
+_SKIP_STATES = frozenset({"pending_validation"})
+_LISA_VERDICT = "lisa"
+# Not a verdict: set when PMC could not be reached, cleared by any real verdict.
+_PROBE_ERROR = "probe_error"
+
+
+def _is_newer_image(row: dict, cur: dict) -> bool:
+    """True when ``row`` carries a newer marketplace version than ``cur``.
+
+    Numeric, not lexical: '9.10.2026...' is newer than '9.8.2026...' but sorts
+    BELOW it as a string, which would pick a stale representative.
+    """
+    return (pmc_packages.version_tuple(row.get("version", ""))
+            > pmc_packages.version_tuple(cur.get("version", "")))
 
 
 def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -192,10 +215,13 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
 
     The DB ``validated`` state is authoritative:
 
-    * Skip any image already ``pending_validation`` (in flight at Phase 3) or
-      ``known_unsupported`` (terminal until an explicit reset). Skipping keeps a
-      re-run over a reused Phase 1 artifact idempotent and avoids double-
-      dispatching / racing a concurrent Phase 3.
+    * Skip any image already ``pending_validation`` (in flight at Phase 3), or
+      ``known_unsupported`` from a Phase 3 VM run (``verdict_source == 'lisa'``).
+      Skipping keeps a re-run over a reused Phase 1 artifact idempotent and
+      avoids double-dispatching / racing a concurrent Phase 3.
+    * Re-check ``known_unsupported`` rows that Phase 2 itself decided: those are
+      repo/package lookups that go stale the moment AzNFS publishes for the
+      distro, so leaving them terminal silently under-reports support.
     * Enrich the survivors with their DB ``last_validated_version`` and tag their
       ``_db_state`` (Gate 3's baseline; the tag lets process_entry avoid
       downgrading a known_supported distro on a transient re-check failure).
@@ -218,10 +244,12 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
         v_img = e.get("last_validated_image_version", "")
         ts = e.get("last_validated", "")
         state = None
+        source = ""
         try:
             rec = db_mod.get_image_record(db_path, *ident)
             if rec:
                 state = rec.get("validated")
+                source = rec.get("verdict_source") or ""
                 v_last = rec.get("last_validated_version", v_last)
                 v_regressed = rec.get("last_regressed_version", v_regressed)
                 v_img = rec.get("last_validated_image_version", v_img)
@@ -230,6 +258,9 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
             logger.debug("DB lookup failed for %s; using entry default", ident)
         if state in _SKIP_STATES:
             logger.info("Skipping %s: DB state %r (already handled / in flight at Phase 3)", ident, state)
+            continue
+        if state == "known_unsupported" and source == _LISA_VERDICT:
+            logger.info("Skipping %s: known_unsupported from a Phase 3 VM run (reset to re-test)", ident)
             continue
         out.append({**e, "last_validated_version": v_last or "",
                     "last_regressed_version": v_regressed or "",
@@ -274,7 +305,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 continue
             key = (row.get("distro_label", ""), row.get("architecture", ""))
             cur = reps.get(key)
-            if cur is None or (row.get("version", "") > cur.get("version", "")):
+            if cur is None or _is_newer_image(row, cur):
                 reps[key] = row
         for row in reps.values():
             ident = (
@@ -285,6 +316,46 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 continue
             seen.add(ident)
             out.append({**row, "_db_state": "known_supported"})
+
+        # Same re-feed for Phase 2's OWN known_unsupported verdicts: they are
+        # repo/package lookups, so they go stale as soon as AzNFS publishes for
+        # the distro (and a single unreachable-PMC run could have caused one).
+        # Rows a Phase 3 VM run decided are left alone. Legacy rows predating
+        # verdict_source are re-checked once, which is what heals them.
+        unsupported_reps: dict[tuple, dict] = {}
+        for row in db_mod.get_rows_by_state(db_path, "known_unsupported"):
+            if _excluded(row) or (row.get("verdict_source") or "") == _LISA_VERDICT:
+                continue
+            key = (row.get("distro_label", ""), row.get("architecture", ""))
+            cur = unsupported_reps.get(key)
+            if cur is None or _is_newer_image(row, cur):
+                unsupported_reps[key] = row
+        for row in unsupported_reps.values():
+            ident = (
+                row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
+                row.get("region", ""), row.get("architecture", ""),
+            )
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append({**row, "_db_state": "known_unsupported"})
+
+        # Rows whose last check could not reach PMC. They carry no verdict --
+        # only the marker -- and `unknown` rows are not re-fed by anything else,
+        # so without this a release stranded by one unreachable run would wait
+        # for Phase 1 to re-emit its image, which only happens when it changes.
+        for row in db_mod.get_rows_by_verdict_source(db_path, _PROBE_ERROR):
+            if _excluded(row):
+                continue
+            ident = (
+                row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
+                row.get("region", ""), row.get("architecture", ""),
+            )
+            if ident in seen:
+                continue
+            seen.add(ident)
+            logger.info("Retrying %s: last check could not reach PMC", ident)
+            out.append({**row, "_db_state": row.get("validated") or None})
     except Exception:  # pragma: no cover - re-check is best-effort
         logger.exception("known_supported re-check re-feed skipped")
 

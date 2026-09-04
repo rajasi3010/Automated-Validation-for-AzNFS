@@ -198,6 +198,7 @@ highlights:
 | `version` | Latest version observed. Bumped in place on a new release. |
 | `validated` | The persisted validation state. Only three values are ever stored: `unknown`, `known_supported`, and `known_unsupported`. (`pending_publish` and `pending_validation` are used only as labels in the summary e-mail — they are never written to the DB; see the Phase 2 section below.) **Preserved across version bumps** so manual validation state is not lost. Surfaced in the Phase 1 JSON as `validation_status`. |
 | `last_validated`, `last_validated_version`, `last_validated_image_version`, `last_regressed_version` | Stamped by Phase 2/3 when a verdict is recorded: the timestamp, the validated AzNFS version + marketplace image (Gate 3's re-validation baselines), and the AzNFS version that regressed on an already-supported distro (if any). |
+| `verdict_source` | Which phase decided: `gate` (Phase 2 repo/package lookup) or `lisa` (Phase 3 ran the suite on a VM). Phase 2 re-checks its own `gate` verdicts every run, so a `known_unsupported` that was stale heals itself; `lisa` verdicts are left alone so a failing distro is not re-provisioned daily. Also holds `probe_error`, which is **not** a verdict: it means the last check could not reach PMC, so `validated` was left untouched and the row is retried on the next run. Any real verdict clears it. |
 | `date_added`, `last_modified`, `last_checked` | All reset to "now" on a version bump. |
 
 A small `meta` key/value table (same DB) holds cross-run state such as the
@@ -310,6 +311,10 @@ they appear only as labels in the summary e-mail.
 
 1. **Gate 1 — repo exists?** `GET /<distro>/<version>/prod/` returns 200. If not,
    the release is stored `known_unsupported` (reason: *prod repo is missing*).
+   If PMC cannot be reached at all (timeout, DNS, connection reset) the probe is
+   retried and then **raises** — absence is unproven, so the row keeps its
+   previous state and the image is listed under errors in the summary. Without
+   this a single network blip permanently mislabelled a distro.
 2. **Gate 2 — package published?** The aznfs directory lists a tracked `0.3.x`
    build for this architecture. If not, the **AzNFS support policy** decides —
    the DB row is stored `known_unsupported` in every case, and the e-mail carries
@@ -337,8 +342,10 @@ RHEL 7 / 8 / 9 / 10; Rocky 8 / 9; SLES 15 / 16.
 Each emitted job provisions a fresh VM and runs the AzNFS 5-tier suite
 (artifact integrity → install lifecycle → post-install footprint → mount + I/O →
 basic resilience). A clean pass records `known_supported`. A failure on a
-not-yet-supported distro records `known_unsupported` (one strike — a human resets
-the DB row to `unknown` if a transient/flaky failure buried a good distro). A
+not-yet-supported distro records `known_unsupported` tagged `verdict_source='lisa'`
+(one strike — a human resets the DB row to `unknown` if a transient/flaky failure
+buried a good distro). Only these VM-tested verdicts are terminal; the cheap
+repo/package verdicts Phase 2 makes are re-checked every run. A
 failure on an **already-`known_supported`** distro is treated as a **regression**,
 not a demotion: the distro stays `known_supported` at its last-good version, the
 failing package is recorded in `last_regressed_version`, an alert is sent, and it

@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS images (
                                       -- marked known_unsupported (e.g. "prod repo is missing"). Cleared
                                       -- (empty) on known_supported. Surfaced in the monthly digest's
                                       -- known_unsupported table.
+    verdict_source TEXT   NOT NULL DEFAULT '',
+                                      -- Which phase produced the verdict: 'gate' (Phase 2 repo/package
+                                      -- check) or 'lisa' (Phase 3 ran the suite on a VM). Phase 2
+                                      -- re-checks its own cheap 'gate' verdicts every run so a stale or
+                                      -- transient known_unsupported self-heals, but leaves 'lisa'
+                                      -- verdicts alone so a failing distro is not re-provisioned daily.
+                                      -- Also holds 'probe_error', which is NOT a verdict: it means the
+                                      -- last check could not reach PMC, so `validated` was left as it
+                                      -- was and the row is retried next run. Any real verdict clears it.
     UNIQUE(publisher, image, sku, region, architecture)
 );
 

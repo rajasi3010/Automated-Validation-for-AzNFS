@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -220,6 +222,14 @@ def in_series(version: str, series: str = AZNFS_SERIES) -> bool:
     return len(got) >= len(want) and got[: len(want)] == want
 
 
+class ProbeError(RuntimeError):
+    """PMC could not be reached, so absence of a repo/package is NOT proven.
+
+    Raised instead of reporting "missing", which the gates would otherwise
+    record as a permanent known_unsupported verdict.
+    """
+
+
 class ProdPackageIndex:
     """Lists aznfs package filenames published under a PMC prod version path."""
 
@@ -228,24 +238,87 @@ class ProdPackageIndex:
         base_url: str | None = None,
         timeout: int | None = None,
         session: requests.Session | None = None,
+        max_retries: int | None = None,
     ) -> None:
         self.base_url = (base_url or PROD_BASE).rstrip("/")
         # ``or "30"`` guards against HTTP_TIMEOUT being set-but-empty in CI
         # (an unset repo variable arrives as ''), which int('') would reject.
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
-        self._session = session or requests.Session()
+        retries = max_retries if max_retries is not None else int(os.environ.get("HTTP_MAX_RETRIES") or "3")
+        self._session = session or self._retrying_session(retries)
         # aznfs dir url -> {filename: autoindex timestamp}. Replaced wholesale on
         # every listing so a directory's cache never outlives what it now serves.
         self._published_at: dict[str, dict[str, datetime]] = {}
+        # distro segment -> release dirs PMC lists, used to corroborate a 404.
+        self._releases: dict[str, frozenset[str] | None] = {}
 
-    def _ok(self, url: str) -> bool:
+    @staticmethod
+    def _retrying_session(max_retries: int) -> requests.Session:
+        retry = Retry(
+            total=max_retries,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+        )
+        session = requests.Session()
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        session.mount("http://", HTTPAdapter(max_retries=retry))
+        return session
+
+    def _distro_index(self, distro: str) -> frozenset[str] | None:
+        """Release directories PMC lists under ``/<distro>/``, or None if unreadable.
+
+        Cached per distro segment, so this costs one request per distro per run
+        and only on the 404 path.
+        """
+        if distro in self._releases:
+            return self._releases[distro]
+        url = f"{self.base_url}/{distro}/"
+        result: frozenset[str] | None = None
         try:
             resp = self._session.get(url, timeout=self.timeout)
-            logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
-            return 200 <= resp.status_code < 300
         except requests.RequestException as exc:
-            logger.warning("GET %s failed: %s", url, exc)
+            logger.warning("Could not read %s to confirm a 404: %s", url, exc)
+        else:
+            if resp.status_code == 404:
+                result = frozenset()  # PMC serves nothing at all for this distro
+            elif 200 <= resp.status_code < 300:
+                names = {h.strip("/").split("/")[-1] for h in _HREF_RE.findall(resp.text)}
+                names -= {"", ".", ".."}
+                # A 200 with no entries is not a healthy index, so treat it as unread.
+                result = frozenset(names) or None
+            else:
+                logger.warning("GET %s -> HTTP %s while confirming a 404", url, resp.status_code)
+        self._releases[distro] = result
+        return result
+
+    def _ok(self, url: str, distro: str | None = None) -> bool:
+        """True when the pocket exists, False only when PMC says 404.
+
+        Any other non-2xx (403 from a WAF, 401, an un-retried 5xx) proves nothing
+        about whether the repo exists, so it raises rather than reporting absence
+        -- reporting absence is what recorded permanent verdicts from outages.
+
+        A 404 is corroborated against ``/<distro>/``: a healthy parent index means
+        PMC really is serving content and the 404 is a true absence. If the parent
+        cannot be read, the 404 could be an edge returning a synthetic one during
+        an outage, so it is not trusted either.
+        """
+        try:
+            resp = self._session.get(url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise ProbeError(f"GET {url} failed: {exc}") from exc
+        logger.debug("Gate 1 probe: GET %s -> HTTP %s", url, resp.status_code)
+        if 200 <= resp.status_code < 300:
+            return True
+        if resp.status_code == 404:
+            if distro is not None and self._distro_index(distro) is None:
+                raise ProbeError(
+                    f"GET {url} -> HTTP 404, but /{distro}/ could not be read to "
+                    f"confirm it; treating the absence as unproven")
             return False
+        raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
 
     def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None:
         """Return the first ``candidates`` version whose prod pocket exists (200).
@@ -255,7 +328,7 @@ class ProdPackageIndex:
         Returns the resolved version string, or ``None`` when none exist.
         """
         for version in candidates:
-            if self._ok(repo_base_url(distro, version, self.base_url)):
+            if self._ok(repo_base_url(distro, version, self.base_url), distro):
                 logger.debug("resolve_repo(%s): matched version %s of candidates %s",
                              distro, version, candidates)
                 return version
@@ -271,12 +344,12 @@ class ProdPackageIndex:
         try:
             resp = self._session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
-            logger.warning("GET %s failed: %s", url, exc)
-            return []
+            raise ProbeError(f"GET {url} failed: {exc}") from exc
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
             return []
-        resp.raise_for_status()
+        if not (200 <= resp.status_code < 300):
+            raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
         ext = ".rpm" if _is_yum(family) else ".deb"
         names: list[str] = []
         stamps: dict[str, datetime] = {}

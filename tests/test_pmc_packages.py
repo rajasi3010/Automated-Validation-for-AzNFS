@@ -8,6 +8,7 @@ import requests
 from src.phase2.pmc_packages import (
     _parse_index_time,
     AZNFS_SERIES,
+    ProbeError,
     ProdPackageIndex,
     aznfs_dir_url,
     distro_segment,
@@ -39,15 +40,16 @@ class _Resp:
 
 
 class _FakeSession:
-    """Returns a canned page per URL; 404 for anything unmapped."""
+    """Returns a canned page per URL; ``status`` (default 404) for anything else."""
 
-    def __init__(self, pages: dict[str, _Resp]) -> None:
+    def __init__(self, pages: dict[str, _Resp], status: int = 404) -> None:
         self.pages = pages
+        self.status = status
         self.requested: list[str] = []
 
     def get(self, url: str, timeout: int | None = None) -> _Resp:
         self.requested.append(url)
-        return self.pages.get(url, _Resp(status_code=404))
+        return self.pages.get(url, _Resp(status_code=self.status))
 
 
 # Real-shaped yum autoindex page (rhel/9 Packages/a/) with aznfs builds.
@@ -212,7 +214,9 @@ def test_resolve_repo_returns_first_existing_candidate():
     idx = ProdPackageIndex(base_url=BASE, session=sess)
 
     assert idx.resolve_repo("rhel", ["9.8", "9"], "yum") == "9"
-    assert sess.requested == [repo_base_url("rhel", "9.8", BASE), url9]  # tried minor first
+    # The 404 on the minor is corroborated against /rhel/ before it is believed.
+    assert sess.requested == [repo_base_url("rhel", "9.8", BASE),
+                              f"{BASE}/rhel/", url9]
 
 
 def test_resolve_repo_none_when_no_candidate_exists():
@@ -287,6 +291,17 @@ class _SwitchingSession:
         return self.pages.pop(0) if self.pages else _Resp("", 404)
 
 
+class _ExplodingSession:
+    """Every request dies the way a timeout / DNS blip does."""
+
+    def __init__(self):
+        self.requested = []
+
+    def get(self, url, timeout=None):
+        self.requested.append(url)
+        raise requests.ConnectionError("read timed out")
+
+
 def test_a_relisting_without_dates_clears_the_old_timestamps():
     # If the index stops publishing the date column, the previous run's
     # timestamps must not linger -- ordering has to fall back to version order.
@@ -340,12 +355,116 @@ def test_all_twelve_month_abbreviations_are_recognised():
 
 
 def test_a_failed_listing_clears_the_old_timestamps():
-    # raise_for_status() on a 5xx must not leave the previous run's times behind.
+    # A 5xx must not leave the previous run's times behind.
     sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 500)])
     idx = ProdPackageIndex(base_url=BASE, session=sess)
 
     idx.list_packages("rhel", "9", "yum")
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(ProbeError):
         idx.list_packages("rhel", "9", "yum")
 
     assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_a_missing_repo():
+    # Returning "missing" here is what recorded permanent known_unsupported
+    # verdicts for distros whose repo existed all along.
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.resolve_repo("ubuntu", ["24.04"], "apt")
+
+
+def test_unreachable_pmc_raises_instead_of_reporting_no_packages():
+    prod = ProdPackageIndex(session=_ExplodingSession())
+
+    with pytest.raises(ProbeError):
+        prod.list_packages("ubuntu", "24.04", "apt")
+
+
+def test_http_404_still_means_genuinely_absent():
+    prod = ProdPackageIndex(session=_FakeSession({}))
+
+    assert prod.resolve_repo("ubuntu", ["24.04"], "apt") is None
+    assert prod.list_packages("ubuntu", "24.04", "apt") == []
+
+
+def test_default_session_retries_transient_failures():
+    retry = ProdPackageIndex()._session.get_adapter("https://").max_retries
+
+    assert retry.total == 3
+    assert 503 in retry.status_forcelist
+
+
+@pytest.mark.parametrize("code", [401, 403, 429, 500, 502, 503])
+def test_only_404_is_read_as_absent(code):
+    # A WAF block or an un-retried 5xx says nothing about whether the repo
+    # exists; reporting "absent" is what wrote permanent verdicts from outages.
+    prod = ProdPackageIndex(base_url=BASE, session=_FakeSession({}, status=code))
+
+    with pytest.raises(ProbeError):
+        prod.resolve_repo("rhel", ["9"], "yum")
+    with pytest.raises(ProbeError):
+        prod.list_packages("rhel", "9", "yum")
+
+
+def test_404_still_means_absent_not_a_probe_failure():
+    prod = ProdPackageIndex(base_url=BASE, session=_FakeSession({}))
+
+    assert prod.resolve_repo("rhel", ["9"], "yum") is None
+    assert prod.list_packages("rhel", "9", "yum") == []
+
+
+RHEL_PARENT_INDEX = """
+<a href="../">../</a>
+<a href="8/">8/</a>
+<a href="9/">9/</a>
+<a href="10/">10/</a>
+"""
+
+
+def test_a_404_is_believed_when_the_parent_index_is_healthy():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp(RHEL_PARENT_INDEX)})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    assert idx.resolve_repo("rhel", ["9.6"], "yum") is None
+
+
+def test_a_404_is_not_believed_when_the_parent_cannot_be_read():
+    # An edge serving synthetic 404s during an outage is the one way a network
+    # fault can still look like "the repo does not exist".
+    class _ParentDown(_FakeSession):
+        def get(self, url, timeout=None):
+            if url.endswith("/rhel/"):
+                raise requests.ConnectionError("read timed out")
+            return super().get(url, timeout)
+
+    idx = ProdPackageIndex(base_url=BASE, session=_ParentDown({}))
+
+    with pytest.raises(ProbeError):
+        idx.resolve_repo("rhel", ["9.6"], "yum")
+
+
+def test_a_404_is_not_believed_when_the_parent_index_is_empty():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp("<html>nothing here</html>")})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    with pytest.raises(ProbeError):
+        idx.resolve_repo("rhel", ["9.6"], "yum")
+
+
+def test_a_404_is_believed_when_the_whole_distro_is_absent():
+    # /nosuch/ itself 404s -> PMC genuinely publishes nothing for it.
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({}))
+
+    assert idx.resolve_repo("nosuch", ["9"], "yum") is None
+
+
+def test_the_parent_index_is_read_once_per_distro():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp(RHEL_PARENT_INDEX)})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.resolve_repo("rhel", ["9.6", "9.7"], "yum")
+    idx.resolve_repo("rhel", ["9.8"], "yum")
+
+    assert sess.requested.count(f"{BASE}/rhel/") == 1

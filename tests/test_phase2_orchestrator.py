@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from src.phase2 import pmc_packages
 from src.phase2.orchestrator import (
     KNOWN_SUPPORTED,
     KNOWN_UNSUPPORTED,
@@ -46,9 +47,11 @@ class FakeProd:
 @dataclass
 class FakeDb:
     updates: list[tuple] = field(default_factory=list)
+    sources: list = field(default_factory=list)
 
-    def set_validation_state(self, identity, state, reason=None):
+    def set_validation_state(self, identity, state, reason=None, verdict_source=None):
         self.updates.append((identity, state, reason))
+        self.sources.append(verdict_source)
 
 
 @dataclass
@@ -742,3 +745,32 @@ def test_pocket_choice_uses_publication_time_not_version_number():
 
     assert r.lisa_job["aznfs_package_url"].endswith(
         "/rhel/9.0/prod/Packages/a/aznfs-0.3.49-1.x86_64.rpm")
+
+
+def test_unreachable_pmc_records_no_verdict_and_is_reported_as_an_error():
+    # A timeout is not a 404: absence is unproven, so the stored verdict stands.
+    class ExplodingProd:
+        def resolve_repo(self, distro, candidates, family=""):
+            raise pmc_packages.ProbeError("read timed out")
+
+        def list_packages(self, distro, version, family):  # pragma: no cover
+            raise AssertionError("not reached")
+
+    db, notifier = FakeDb(), FakeNotifier()
+
+    run_phase2([entry(distro_label="Ubuntu 24.04")], ExplodingProd(), db, notifier)
+
+    assert db.updates == []  # the stored verdict is left untouched
+    summary = notifier.summaries[-1]
+    assert summary["unsupported"] == []
+    assert "PMC unreachable" in summary["errors"][0][1]
+def test_phase2_tags_its_verdicts_as_gate_decisions():
+    # The tag is what lets a later run re-check this cheap lookup instead of
+    # treating it as a permanent verdict.
+    prod = FakeProd(repos={}, packages={})
+    db = FakeDb()
+
+    r = process_entry(entry(distro_label="Ubuntu 24.04"), prod, db)
+
+    assert r.outcome == "known_unsupported"
+    assert db.sources == ["gate"]
