@@ -94,11 +94,10 @@ def version_candidates(distro_label: str, fallback_version: str = "",
                        family: str = "") -> list[str]:
     """Ordered PMC version segments to try for a distro_label.
 
-    rpm families publish per major, and PMC serves that pocket at both
-    ``<major>`` and ``<major>.0`` (rhel/8 and rhel/8.0 carry the same 47 builds),
-    so "RHEL 9.6" -> ["9", "9.0"]. The image's own minor is deliberately never
-    tried: rhel/9.6 does not exist, and rhel/8.1 exists but carries no AzNFS, so
-    probing it reported a supported release as unsupported.
+    rpm families: only an ``x`` / ``x.0`` release probes both ``x`` and ``x.0``
+    (PMC serves the same pocket at both -- rhel/8 and rhel/8.0 carry the same 47
+    builds). Any other minor probes only itself, so 8.1 never resolves to 8:
+    rhel/8.1 is its own pocket and AzNFS publishes nothing there.
 
     Ubuntu/Debian publish per release, so "Ubuntu 22.04" -> ["22.04", "22"].
     Falls back to the marketplace ``version`` when the label has no number.
@@ -108,7 +107,9 @@ def version_candidates(distro_label: str, fallback_version: str = "",
         return []
     major, minor = m.group(1), m.group(2)
     if _is_yum(family):
-        return [major, f"{major}.0"]
+        if minor in (None, "0"):
+            return [major, f"{major}.0"]
+        return [f"{major}.{minor}"]
     if minor is not None:
         return [f"{major}.{minor}", major]
     return [major]

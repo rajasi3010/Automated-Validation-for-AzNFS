@@ -42,15 +42,22 @@ def test_pass_exact_version():
     assert r.resolved_version == "22.04"
 
 
-def test_pass_rhel_minor_falls_back_to_major():
-    prod = FakeProd({"rhel": {"9"}})  # only /rhel/9/ exists, not /rhel/9.8/
-    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.8", family="yum"), prod)
+def test_pass_rhel_x0_release_probes_both_pockets():
+    prod = FakeProd({"rhel": {"9"}})  # PMC serves the same pocket at 9 and 9.0
+    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum"), prod)
     assert r.passed
     assert r.segment == "rhel"
     assert r.resolved_version == "9"
-    # The image's own minor is never probed: rhel/9.8 does not exist, and empty
-    # pockets like rhel/8.1 would otherwise shadow the repo that has the package.
     assert prod.resolve_calls[-1] == ("rhel", ("9", "9.0"), "yum")
+
+
+def test_rhel_other_minor_never_falls_back_to_the_major():
+    # AzNFS publishes to rhel/9.0; rhel/9.8 is its own pocket with no packages,
+    # so resolving it to /rhel/9/ would claim support the release does not have.
+    prod = FakeProd({"rhel": {"9"}})
+    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.8", family="yum"), prod)
+    assert not r.passed
+    assert prod.resolve_calls[-1] == ("rhel", ("9.8",), "yum")
 
 
 def test_fail_unmapped_distro():

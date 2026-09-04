@@ -13,17 +13,18 @@ def test_publish_targets_mirror_packages_csv():
     }
 
 
-def test_rhel_and_rocky_match_on_the_major():
-    # AzNFS publishes RHEL-8.0 but the repo serves every 8.x, so 8.1 is in scope.
-    assert m.SUPPORTED_RHEL == {"7", "8", "9", "10"}
-    assert m.SUPPORTED_ROCKY == {"8", "9"}
+def test_scope_is_the_publish_targets_plus_their_bare_major():
+    # "RHEL 8" and "RHEL 8.0" both label the 8.0 target; 8.1 is a separate
+    # release AzNFS publishes nothing for.
+    assert m.SUPPORTED_RHEL == {"7", "7.0", "7.3", "8", "8.0", "9", "9.0", "10", "10.0"}
+    assert m.SUPPORTED_ROCKY == {"8", "8.0", "9", "9.0"}
     assert m.SUPPORTED_SLES == {"15", "16"}
     assert m.SUPPORTED_UBUNTU == {"18.04", "20.04", "22.04", "24.04", "26.04"}
 
 
 def test_releases_inside_the_matrix():
-    for label in ("Ubuntu 22.04", "Ubuntu 26.04", "RHEL 9", "RHEL 10",
-                  "Rocky 8", "SLES 15", "SLES 16"):
+    for label in ("Ubuntu 22.04", "Ubuntu 26.04", "RHEL 9", "RHEL 9.0",
+                  "Rocky 8", "Rocky 9.0", "SLES 15", "SLES 16"):
         assert m.is_supported_distro(label), label
 
 
@@ -35,11 +36,12 @@ def test_releases_outside_the_matrix():
         assert not m.is_supported_distro(label), label
 
 
-def test_rhel_minor_releases_follow_their_major():
-    # rhel/8.1 and rhel/9.6 are in scope because RHEL 8 and 9 are.
-    assert m.is_supported_distro("RHEL 8.1")
-    assert m.is_supported_distro("RHEL 9.6")
-    assert not m.is_supported_distro("RHEL 6.5")
+def test_other_rhel_minors_are_out_of_scope():
+    # AzNFS publishes to rhel/8.0; rhel/8.1 is its own pocket with no packages.
+    for label in ("RHEL 8.1", "RHEL 8.6", "RHEL 9.6", "RHEL 10.2", "RHEL 6.5"):
+        assert not m.is_supported_distro(label), label
+    for label in ("RHEL 8", "RHEL 8.0", "RHEL 7.3", "RHEL 10.0"):
+        assert m.is_supported_distro(label), label
 
 
 def test_unparseable_labels_are_out_of_scope():

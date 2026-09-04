@@ -22,16 +22,35 @@ PUBLISH_TARGETS = {
 }
 
 
-def _majors(family: str) -> set[str]:
-    return {target.split(".")[0] for target in PUBLISH_TARGETS[family]}
+def _accepted_versions(family: str) -> set[str]:
+    """Publish targets plus their bare-major spelling.
+
+    The marketplace labels the same release either way ("RHEL 8" and "RHEL 8.0"
+    are both the 8.0 target), so both forms are accepted. A different minor is
+    NOT: 8.1 is its own release and AzNFS publishes nothing for it.
+    """
+    accepted = set()
+    for target in PUBLISH_TARGETS[family]:
+        accepted.add(target)
+        major, _, minor = target.partition(".")
+        if minor == "0":
+            accepted.add(major)
+    return accepted
 
 
-SUPPORTED_UBUNTU = set(PUBLISH_TARGETS["Ubuntu"])   # matched as major.minor
-SUPPORTED_RHEL = _majors("RHEL")                    # {"7", "8", "9", "10"}
-SUPPORTED_ROCKY = _majors("Rocky")                  # {"8", "9"}
-SUPPORTED_SLES = _majors("SUSE")                    # {"15", "16"}
+SUPPORTED_UBUNTU = _accepted_versions("Ubuntu")   # {"18.04", ... } exact releases
+SUPPORTED_RHEL = _accepted_versions("RHEL")       # {"7", "7.0", "7.3", "8", "8.0", ...}
+SUPPORTED_ROCKY = _accepted_versions("Rocky")     # {"8", "8.0", "9", "9.0"}
+SUPPORTED_SLES = _accepted_versions("SUSE")       # {"15", "16"}
 
 OUT_OF_MATRIX_REASON = "outside the AzNFS support matrix"
+
+
+def _label_version(label: str) -> str:
+    major, minor = major_minor(label)
+    if not major:
+        return ""
+    return f"{major}.{minor}" if minor else major
 
 
 def major_minor(label: str) -> tuple[str, str]:
@@ -42,17 +61,23 @@ def major_minor(label: str) -> tuple[str, str]:
 
 
 def is_supported_distro(label: str) -> bool:
-    """True when AzNFS targets this distro release."""
+    """True when AzNFS publishes for exactly this distro release.
+
+    A different minor of a supported major is NOT in scope: AzNFS publishes to
+    rhel/8.0, and rhel/8.1 is a separate pocket carrying no AzNFS. Phase 2 skips
+    those; a manual run can still force one.
+    """
     s = (label or "").strip().lower()
-    major, minor = major_minor(s)
+    ver = _label_version(s)
+    if not ver:
+        return False
 
     if "ubuntu" in s:
-        ver = f"{major}.{minor}" if major and minor else ""
         return ver in SUPPORTED_UBUNTU
     if "rhel" in s or "redhat" in s or "red hat" in s:
-        return major in SUPPORTED_RHEL
+        return ver in SUPPORTED_RHEL
     if "rocky" in s:
-        return major in SUPPORTED_ROCKY
+        return ver in SUPPORTED_ROCKY
     if "sles" in s or "suse" in s:
-        return major in SUPPORTED_SLES
+        return ver in SUPPORTED_SLES
     return False
