@@ -338,16 +338,16 @@ def test_enrich_merges_pending_publish_rows_and_dedupes():
     e = _entry()
     dup_row = {**e, "last_validated_version": ""}        # same identity -> not duplicated
     extra_row = {
-        "publisher": "Debian", "image": "debian-11", "sku": "d",
+        "publisher": "resf", "image": "rockylinux-x86_64", "sku": "9-base",
         "region": "eastus", "architecture": "x86_64",
-        "family": "apt", "distro_label": "Debian 11", "last_validated_version": "",
+        "family": "yum", "distro_label": "Rocky 9", "last_validated_version": "",
     }
     db = FakeDbMod(pending=[dup_row, extra_row])
 
     out = run.enrich_and_merge([e], db, "db")
 
     assert len(out) == 2
-    assert {r["distro_label"] for r in out} == {"Ubuntu 22.04", "Debian 11"}
+    assert {r["distro_label"] for r in out} == {"Ubuntu 22.04", "Rocky 9"}
 
 
 def _ident(e):
@@ -484,3 +484,14 @@ def test_run_end_to_end_trusted(tmp_path):
     # ...but a trusted-only run is NOT actionable, so no summary e-mail is sent
     # (the daily known_supported re-check would otherwise mail every run).
     assert notifier_mod.summaries == []
+
+
+def test_phase2_validates_whatever_it_is_handed():
+    # Scope is Phase 1's job. Phase 2 must not second-guess its input, so a
+    # manually selected out-of-matrix distro flows through untouched.
+    entries = [_entry(sku="in", distro_label="Ubuntu 24.04"),
+               _entry(sku="debian", distro_label="Debian 12")]
+
+    out = run.enrich_and_merge(entries, FakeDbMod(), "db")
+
+    assert [r["distro_label"] for r in out] == ["Ubuntu 24.04", "Debian 12"]

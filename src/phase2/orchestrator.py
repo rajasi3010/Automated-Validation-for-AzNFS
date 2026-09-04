@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from . import pmc_packages
+import aznfs_support
 import requests
 
 logger = logging.getLogger(__name__)
@@ -107,33 +108,14 @@ def _identity(entry: dict) -> tuple[str, str, str, str, str]:
 _AZNFS_PACKAGES_CSV_URL = (
     "https://raw.githubusercontent.com/Azure/AZNFS-mount/main/packages.csv"
 )
-_SUPPORTED_UBUNTU = {"18.04", "20.04", "22.04", "24.04", "26.04"}
-_SUPPORTED_RHEL = {"7", "8", "9", "10"}
-_SUPPORTED_ROCKY = {"8", "9"}
-_SUPPORTED_SLES = {"15", "16"}
 
 
 def _major_minor(label: str) -> tuple[str, str]:
-    m = re.search(r"(10|\d+)(?:\.(\d+))?", label)
-    if not m:
-        return "", ""
-    return m.group(1), m.group(2) or ""
+    return aznfs_support.major_minor(label)
 
 
 def _is_aznfs_supported_distro(label: str) -> bool:
-    s = (label or "").strip().lower()
-    major, minor = _major_minor(s)
-
-    if "ubuntu" in s:
-        ver = f"{major}.{minor}" if major and minor else ""
-        return ver in _SUPPORTED_UBUNTU
-    if "rhel" in s or "redhat" in s or "red hat" in s:
-        return major in _SUPPORTED_RHEL
-    if "rocky" in s:
-        return major in _SUPPORTED_ROCKY
-    if "sles" in s or "suse" in s:
-        return major in _SUPPORTED_SLES
-    return False
+    return aznfs_support.is_supported_distro(label)
 
 
 def _packages_csv_mentions_distro(label: str) -> bool:
@@ -182,11 +164,42 @@ def _packages_csv_mentions_distro(label: str) -> bool:
 # ---------------------------------------------------------------------------
 # Gate 1: does a prod repo exist for this distro release?
 # ---------------------------------------------------------------------------
+def _newest_package(prod: ProdLike, segment: str, version: str, family: str,
+                    want_arch: str) -> tuple[int, ...]:
+    """Numeric version of the newest in-series aznfs package in one pocket.
+
+    Best-effort: a listing failure here scores the pocket as empty rather than
+    failing the image, so a broken /rhel/8.0/ cannot take down an image whose
+    /rhel/8/ is healthy. Gate 2 lists the pocket that wins and does surface a
+    failure there, so a verdict is never recorded off a listing that errored.
+    """
+    try:
+        files = prod.list_packages(segment, version, family)
+    except Exception as exc:  # noqa: BLE001 - any listing failure means "unknown"
+        logger.warning("Could not list /%s/%s/ while choosing a pocket: %s",
+                       segment, version, exc)
+        return ()
+
+    best: tuple[int, ...] = ()
+    for name in files:
+        if pmc_packages.file_arch(name, family) != want_arch:
+            continue
+        version_str = pmc_packages.version_from_filename(name)
+        if pmc_packages.in_series(version_str):
+            best = max(best, pmc_packages.version_tuple(version_str))
+    return best
+
+
 def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     """A PMC prod pocket exists for this image's distro release.
 
     Resolves the ``<distro>`` segment + ``<version>`` candidates from the image's
     ``distro_label`` (no codename map) and probes ``/<distro>/<version>/prod/``.
+
+    PMC serves an x.0 release at two paths (rhel/8 and rhel/8.0), and they are
+    not guaranteed to be in step, so when both exist the one carrying the newer
+    aznfs package wins -- that pocket is what Gate 2 counts and what Phase 3
+    installs from. Ties keep candidate order.
     """
     label = entry.get("distro_label", "")
     family = entry.get("family") or ""
@@ -198,9 +211,20 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
     if not candidates:
         return GateResult(False, "unparseable version", details=f"{label!r}")
 
-    resolved = prod.resolve_repo(segment, candidates, family)
-    if not resolved:
+    # Two candidates are always the x / x.0 pair: one release served at two
+    # paths that can drift, so both are probed and the newer one wins.
+    existing = [v for v in candidates if prod.resolve_repo(segment, [v], family)]
+    if not existing:
         return GateResult(False, "prod repo missing", details=f"{segment} {candidates}")
+
+    resolved = existing[0]
+    if len(existing) > 1:
+        arch = entry.get("architecture") or entry.get("arch") or ""
+        want_arch = pmc_packages.normalize_arch(arch, family)
+        resolved = max(existing,
+                       key=lambda v: _newest_package(prod, segment, v, family, want_arch))
+        logger.info("[%s] %s pockets %s both exist -> using /%s/%s/ (newest package)",
+                    label or "?", segment, existing, segment, resolved)
     return GateResult(True, segment=segment, resolved_version=resolved)
 
 

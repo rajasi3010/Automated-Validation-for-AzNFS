@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 import config
 import azure_client
+import aznfs_support
 import db_manager
 import notifier
 import status_rollup
@@ -257,13 +258,26 @@ def format_phase2_input(records: list[dict]) -> list[dict]:
 
     Keep all existing fields used by Phase 2, but rename ``validated`` to
     ``validation_status`` in the JSON artifact.
+
+    This is also where the AzNFS support matrix is enforced: every byte Phase 2
+    receives is built here, so filtering at this one point means Phase 2 can
+    simply validate whatever it is handed. Releases AzNFS does not publish for
+    are still scanned, stored and reported -- they are just never handed over,
+    because a missing package there is expected rather than a finding.
     """
     out: list[dict] = []
+    skipped = 0
     for r in records:
+        if not aznfs_support.is_supported_distro(r.get("distro_label", "")):
+            skipped += 1
+            continue
         row = dict(r)
         status = row.pop("validated", "")
         row["validation_status"] = status
         out.append(row)
+    if skipped:
+        logger.info("Phase 2 hand-off: %d row(s) held back, %s",
+                    skipped, aznfs_support.OUT_OF_MATRIX_REASON)
     return out
 
 

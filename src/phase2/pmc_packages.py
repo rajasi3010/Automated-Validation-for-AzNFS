@@ -5,9 +5,10 @@ no corp proxy). PMC prod is *version-indexed*::
 
     https://packages.microsoft.com/<distro>/<version>/prod/
 
-so the image's ``distro_label`` ("Ubuntu 22.04", "RHEL 9.8") maps straight to a
-URL with no codename (jammy/noble) lookup. RHEL only publishes a subset of minor
-versions, so the version is resolved with a ``major.minor`` -> ``major`` fallback.
+so the image's ``distro_label`` ("Ubuntu 22.04", "RHEL 9.0") maps straight to a
+URL with no codename (jammy/noble) lookup. An ``x`` / ``x.0`` release is served
+at both ``<major>`` and ``<major>.0``; every other release resolves only to
+itself, so rhel/8.1 never falls back to rhel/8.
 
 aznfs package directory layout (anonymous HTTP, autoindex pages):
   apt: {base}/<distro>/<version>/prod/pool/main/a/aznfs/   -> aznfs_<ver>_<arch>.deb
@@ -93,18 +94,20 @@ def index_kind(distro_label: str, publisher: str = "", family: str = "") -> str:
 def version_candidates(distro_label: str, fallback_version: str = "") -> list[str]:
     """Ordered PMC version segments to try for a distro_label.
 
-    "Ubuntu 22.04" -> ["22.04", "22"]; "RHEL 9.8" -> ["9.8", "9"]; "RHEL 10" ->
-    ["10"]. ``major.minor`` is tried first (exact), then ``major`` (RHEL only
-    publishes some minors, e.g. /rhel/9/ but not /rhel/9.8/). Falls back to the
-    marketplace ``version`` string when the label has no number.
+    An ``x`` / ``x.0`` release is served at both paths -- rhel/8 and rhel/8.0 are
+    the same pocket -- so both are tried. Every other release is tried only as
+    itself: rhel/8.1 must never resolve to rhel/8, and ubuntu/22.04 must never
+    resolve to ubuntu/22, because those are different releases.
+
+    Falls back to the marketplace ``version`` when the label has no number.
     """
     m = _VER_RE.search(distro_label or "") or _VER_RE.search(fallback_version or "")
     if not m:
         return []
     major, minor = m.group(1), m.group(2)
-    if minor is not None:
-        return [f"{major}.{minor}", major]
-    return [major]
+    if minor is None or minor == "0":
+        return [major, f"{major}.0"]
+    return [f"{major}.{minor}"]
 
 
 # ---------------------------------------------------------------------------

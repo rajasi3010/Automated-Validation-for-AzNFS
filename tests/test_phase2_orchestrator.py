@@ -490,8 +490,9 @@ def test_only_non_series_builds_is_pending_publish(monkeypatch):
     assert db.updates[-1][1] == KNOWN_UNSUPPORTED
 
 
-def test_yum_minor_fallback_and_arch_mapping_to_phase3():
-    # RHEL 9.8 -> /rhel/9/; x86_64 image maps to the x86_64 rpm.
+def test_yum_x0_release_probes_both_pockets_and_maps_arch():
+    # RHEL 9.0 is a publish target, so /rhel/9/ and /rhel/9.0/ are both tried;
+    # the x86_64 image maps to the x86_64 rpm.
     prod = FakeProd(
         repos={"rhel": {"9"}},
         packages={("rhel", "9"): [
@@ -502,7 +503,7 @@ def test_yum_minor_fallback_and_arch_mapping_to_phase3():
     db = FakeDb()
 
     r = process_entry(
-        entry(publisher="RedHat", distro_label="RHEL 9.8", family="yum",
+        entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum",
               architecture="x86_64", image="RHEL", sku="9-lvm"),
         prod, db,
     )

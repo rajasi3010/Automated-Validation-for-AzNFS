@@ -6,9 +6,12 @@ from src.phase2.orchestrator import gate1_repo_exists
 class FakeProd:
     """Models PMC prod: which (distro, version) pockets exist."""
 
-    def __init__(self, repos: dict[str, set[str]] | None = None) -> None:
+    def __init__(self, repos: dict[str, set[str]] | None = None,
+                 packages: dict[tuple[str, str], list[str]] | None = None) -> None:
         # distro -> set of version segments whose /prod/ pocket returns 200
         self.repos = repos or {}
+        # (distro, version) -> published aznfs filenames
+        self.packages = packages or {}
         self.resolve_calls: list[tuple] = []
 
     def resolve_repo(self, distro: str, candidates: list[str], family: str = "") -> str | None:
@@ -19,8 +22,11 @@ class FakeProd:
                 return v
         return None
 
-    def list_packages(self, distro, version, family):  # unused by gate 1
-        return []
+    def list_packages(self, distro, version, family):
+        listing = self.packages.get((distro, version), [])
+        if isinstance(listing, Exception):
+            raise listing
+        return listing
 
 
 def entry(**kw):
@@ -42,14 +48,22 @@ def test_pass_exact_version():
     assert r.resolved_version == "22.04"
 
 
-def test_pass_rhel_minor_falls_back_to_major():
-    prod = FakeProd({"rhel": {"9"}})  # only /rhel/9/ exists, not /rhel/9.8/
-    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.8", family="yum"), prod)
+def test_pass_rhel_x0_release_probes_both_pockets():
+    prod = FakeProd({"rhel": {"9"}})  # PMC serves the same pocket at 9 and 9.0
+    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.0", family="yum"), prod)
     assert r.passed
     assert r.segment == "rhel"
     assert r.resolved_version == "9"
-    # tried 9.8 before falling back to 9
-    assert prod.resolve_calls[-1] == ("rhel", ("9.8", "9"), "yum")
+    assert prod.resolve_calls == [("rhel", ("9",), "yum"), ("rhel", ("9.0",), "yum")]
+
+
+def test_rhel_other_minor_never_falls_back_to_the_major():
+    # AzNFS publishes to rhel/9.0; rhel/9.8 is its own pocket with no packages,
+    # so resolving it to /rhel/9/ would claim support the release does not have.
+    prod = FakeProd({"rhel": {"9"}})
+    r = gate1_repo_exists(entry(publisher="RedHat", distro_label="RHEL 9.8", family="yum"), prod)
+    assert not r.passed
+    assert prod.resolve_calls == [("rhel", ("9.8",), "yum")]
 
 
 def test_fail_unmapped_distro():
@@ -72,3 +86,82 @@ def test_fail_prod_repo_missing():
     assert not r.passed
     assert r.reason == "prod repo missing"
     assert "ubuntu" in r.details
+
+
+def test_x0_release_picks_the_pocket_with_the_newest_package():
+    # PMC serves RHEL 9.0 at /rhel/9/ and /rhel/9.0/, and the two can drift.
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): ["aznfs-0.3.100-1.x86_64.rpm"],
+            ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+        },
+    )
+    r = gate1_repo_exists(
+        entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
+    assert r.passed
+    assert r.resolved_version == "9.0"
+
+
+def test_x0_pocket_choice_ignores_the_other_arch():
+    # A newer aarch64 build must not drag an x86_64 image into that pocket.
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): ["aznfs-0.3.458-1.x86_64.rpm"],
+            ("rhel", "9.0"): ["aznfs-0.3.999-1.aarch64.rpm"],
+        },
+    )
+    r = gate1_repo_exists(
+        entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
+    assert r.resolved_version == "9"
+
+
+def test_x0_pocket_tie_keeps_candidate_order():
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): ["aznfs-0.3.458-1.x86_64.rpm"],
+            ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+        },
+    )
+    r = gate1_repo_exists(
+        entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
+    assert r.resolved_version == "9"
+
+
+def test_x0_release_falls_back_to_the_only_pocket_that_exists():
+    prod = FakeProd(repos={"rhel": {"9.0"}})
+    r = gate1_repo_exists(entry(distro_label="RHEL 9.0", family="yum"), prod)
+    assert r.passed
+    assert r.resolved_version == "9.0"
+
+
+def test_a_broken_listing_does_not_sink_the_healthy_pocket():
+    # A 5xx on one pocket must not fail the image when the other pocket is fine.
+    prod = FakeProd(
+        repos={"rhel": {"9", "9.0"}},
+        packages={
+            ("rhel", "9"): RuntimeError("boom"),
+            ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+        },
+    )
+    r = gate1_repo_exists(
+        entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
+    assert r.passed
+    assert r.resolved_version == "9.0"
+
+
+def test_pocket_choice_accepts_the_arch_key_too():
+    # Entries reach Phase 2 with either "architecture" or "arch" (LISA-job
+    # shaped rows use the short key); both must select the same pocket.
+    packages = {
+        ("rhel", "9"): ["aznfs-0.3.100-1.x86_64.rpm"],
+        ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+    }
+    for key in ("architecture", "arch"):
+        prod = FakeProd(repos={"rhel": {"9", "9.0"}}, packages=packages)
+        e = entry(distro_label="RHEL 9.0", family="yum")
+        e.pop("architecture", None)
+        e[key] = "x86_64"
+        assert gate1_repo_exists(e, prod).resolved_version == "9.0", key

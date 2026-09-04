@@ -8,7 +8,8 @@ os.environ.setdefault("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-00000000
 
 import pytest
 
-from scan_marketplace import derive_family_and_distro_label as derive, rollup_by_distro
+from scan_marketplace import (derive_family_and_distro_label as derive,
+                              format_phase2_input, rollup_by_distro)
 
 
 @pytest.mark.parametrize(
@@ -65,3 +66,26 @@ def test_rollup_collapses_skus_to_distro_releases():
     assert ubuntu["publishers"] == ["Canonical"]
     # sku / version / region / offer are not part of the rollup identity.
     assert "sku" not in ubuntu and "image" not in ubuntu
+
+
+def _row(label, sku="s"):
+    return {"publisher": "p", "image": "i", "sku": sku, "version": "1",
+            "region": "r", "architecture": "x86_64", "family": "apt",
+            "distro_label": label, "validated": "unknown"}
+
+
+def test_phase2_handoff_carries_only_the_support_matrix():
+    # Everything is still scanned and stored; only the hand-off is narrowed, so
+    # Phase 2 never has to decide whether a distro is worth validating.
+    rows = [_row("Ubuntu 24.04"), _row("Ubuntu 25.10"), _row("RHEL 8.0"),
+            _row("RHEL 8.6"), _row("Debian 12"), _row("Rocky 9")]
+
+    out = format_phase2_input(rows)
+
+    assert [r["distro_label"] for r in out] == ["Ubuntu 24.04", "RHEL 8.0", "Rocky 9"]
+
+
+def test_phase2_handoff_still_renames_validated():
+    out = format_phase2_input([_row("Ubuntu 22.04")])
+    assert out[0]["validation_status"] == "unknown"
+    assert "validated" not in out[0]

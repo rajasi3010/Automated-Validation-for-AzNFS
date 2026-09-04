@@ -28,6 +28,7 @@ import os
 from typing import Any
 
 from . import orchestrator, pmc_packages
+import aznfs_support
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,12 @@ def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
 def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dict]:
     """Build Phase 2's work queue from the Phase 1 hand-off + the DB.
 
+    The incoming ``entries`` are validated as given -- Phase 1 already limited
+    the hand-off to the AzNFS support matrix, and a manual ``--distros`` run is
+    an explicit operator choice. Only the DB re-feeds below are matrix-checked,
+    since those are re-entries Phase 2 initiates itself and can still surface a
+    legacy row for a release AzNFS never published for.
+
     The DB ``validated`` state is authoritative:
 
     * Skip any image already ``pending_validation`` (in flight at Phase 3) or
@@ -235,7 +242,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 row.get("publisher", ""), row.get("image", ""), row.get("sku", ""),
                 row.get("region", ""), row.get("architecture", ""),
             )
-            if ident in seen:
+            if ident in seen or not aznfs_support.is_supported_distro(row.get("distro_label", "")):
                 continue
             seen.add(ident)
             out.append(row)  # DB rows already carry family / distro_label / last_validated_version
@@ -258,7 +265,8 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
             label = (row.get("distro_label") or "").casefold()
             hay = f"{row.get('image', '')} {row.get('sku', '')}".casefold()
             return (any(label.startswith(p) for p in distro_prefixes)
-                    or any(s in hay for s in offer_subs))
+                    or any(s in hay for s in offer_subs)
+                    or not aznfs_support.is_supported_distro(row.get("distro_label", "")))
 
         reps: dict[tuple, dict] = {}
         for row in db_mod.get_rows_by_state(db_path, "known_supported"):

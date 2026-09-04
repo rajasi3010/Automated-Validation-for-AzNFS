@@ -98,11 +98,15 @@ def test_index_kind(label, publisher, family, expected):
 
 
 @pytest.mark.parametrize("label,fallback,expected", [
-    ("Ubuntu 22.04", "", ["22.04", "22"]),
-    ("RHEL 9.8", "", ["9.8", "9"]),
-    ("RHEL 10", "", ["10"]),
-    ("Debian 11", "", ["11"]),
-    ("", "24.04.202506", ["24.04", "24"]),   # fall back to the marketplace version
+    # Only an x / x.0 release is served at two paths, so only it probes both.
+    ("RHEL 10", "", ["10", "10.0"]),
+    ("RHEL 9.0", "", ["9", "9.0"]),
+    ("Debian 11", "", ["11", "11.0"]),
+    # Everything else is its own release and probes itself alone.
+    ("Ubuntu 22.04", "", ["22.04"]),
+    ("RHEL 9.8", "", ["9.8"]),
+    ("RHEL 8.1", "", ["8.1"]),
+    ("", "24.04.202506", ["24.04"]),   # fall back to the marketplace version
     ("no-numbers", "also-none", []),
 ])
 def test_version_candidates(label, fallback, expected):
