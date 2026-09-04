@@ -46,7 +46,7 @@ def test_sku_reasons_are_redacted_like_the_distro_reason():
     assert "denied for client" in sku["reason"]
 
 
-def test_digest_email_names_the_failing_skus():
+def test_digest_email_names_the_failing_skus(monkeypatch):
     buckets = {"known_unsupported": [{
         "distro_label": "Ubuntu 24.04", "version": "24.04.1", "publishers": ["Canonical"],
         "sku_count": 1, "reason": "prod repo is missing",
@@ -55,16 +55,16 @@ def test_digest_email_names_the_failing_skus():
     }]}
     sent = {}
 
-    notifier._send = lambda subject, plain, html_body, recipients: sent.update(
-        {"plain": plain, "html": html_body}
-    )
+    monkeypatch.setattr(notifier, "_send",
+                        lambda subject, plain, html_body, recipients: sent.update(
+                            {"plain": plain, "html": html_body}))
     notifier.send_monthly_reminder(buckets, recipients=["someone@example.com"])
 
     assert "ubuntu-24_04-lts/minimal-arm64" in sent["plain"]
     assert "ubuntu-24_04-lts/minimal-arm64" in sent["html"]
 
 
-def test_supported_bucket_is_not_padded_with_sku_lists():
+def test_supported_bucket_is_not_padded_with_sku_lists(monkeypatch):
     # Only failures need the breakdown; 27 healthy SKUs would drown the mail.
     buckets = {"known_supported": [{
         "distro_label": "Ubuntu 22.04", "version": "22.04.1", "publishers": ["Canonical"],
@@ -74,9 +74,9 @@ def test_supported_bucket_is_not_padded_with_sku_lists():
     }]}
     sent = {}
 
-    notifier._send = lambda subject, plain, html_body, recipients: sent.update(
-        {"plain": plain, "html": html_body}
-    )
+    monkeypatch.setattr(notifier, "_send",
+                        lambda subject, plain, html_body, recipients: sent.update(
+                            {"plain": plain, "html": html_body}))
     notifier.send_monthly_reminder(buckets, recipients=["someone@example.com"])
 
     assert "ubuntu-22_04-lts/server" not in sent["plain"]
