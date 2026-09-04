@@ -49,6 +49,31 @@ _INDEX_ENTRY_RE = re.compile(
 _AZNFS_VERSION_RE = re.compile(r"aznfs[_-]v?([0-9]+(?:\.[0-9]+)*)")
 _VER_RE = re.compile(r"(\d+)(?:\.(\d+))?")
 
+_INDEX_TIME_RE = re.compile(r"(\d{2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}):(\d{2})$")
+_MONTHS = {name: number for number, name in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
+
+
+def _parse_index_time(stamp: str) -> datetime | None:
+    """Parse an autoindex date like ``03-Sep-2026 17:58`` as UTC.
+
+    Month names are matched against an explicit table rather than ``%b``, which
+    is locale-dependent: under a non-English LC_TIME every PMC timestamp would
+    silently fail to parse and ordering would quietly fall back to version order.
+    """
+    m = _INDEX_TIME_RE.match((stamp or "").strip())
+    if not m:
+        return None
+    month = _MONTHS.get(m.group(2).lower())
+    if month is None:
+        return None
+    try:
+        return datetime(int(m.group(3)), month, int(m.group(1)),
+                        int(m.group(4)), int(m.group(5)), tzinfo=timezone.utc)
+    except ValueError:  # e.g. 31-Feb
+        return None
+
 
 def _is_yum(family: str) -> bool:
     return (family or "").strip().lower() in {"yum", "rpm", "dnf"}
@@ -240,15 +265,16 @@ class ProdPackageIndex:
     def list_packages(self, distro: str, version: str, family: str) -> list[str]:
         """aznfs package filenames published under this prod path (may be empty)."""
         url = aznfs_dir_url(distro, version, family, self.base_url)
+        # Drop the previous listing's timestamps up front so NO exit path -- 404,
+        # network error, raise_for_status on a 5xx -- can leave stale ones behind.
+        self._published_at.pop(url, None)
         try:
             resp = self._session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
             logger.warning("GET %s failed: %s", url, exc)
-            self._published_at.pop(url, None)
             return []
         if resp.status_code == 404:
             logger.debug("Gate 2 listing: GET %s -> HTTP 404 (no aznfs dir)", url)
-            self._published_at.pop(url, None)
             return []
         resp.raise_for_status()
         ext = ".rpm" if _is_yum(family) else ".deb"
@@ -256,11 +282,11 @@ class ProdPackageIndex:
         stamps: dict[str, datetime] = {}
         for href, stamp in _INDEX_ENTRY_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
-            try:
-                stamps[name] = datetime.strptime(
-                    stamp, "%d-%b-%Y %H:%M").replace(tzinfo=timezone.utc)
-            except ValueError:
+            published = _parse_index_time(stamp)
+            if published is None:
                 logger.debug("Unparseable PMC timestamp %r for %s", stamp, name)
+            else:
+                stamps[name] = published
         self._published_at[url] = stamps
         for href in _HREF_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]

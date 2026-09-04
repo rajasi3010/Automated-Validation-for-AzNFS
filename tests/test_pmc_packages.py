@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import timezone
+
 import pytest
 import requests
 
 from src.phase2.pmc_packages import (
+    _parse_index_time,
     AZNFS_SERIES,
     ProdPackageIndex,
     aznfs_dir_url,
@@ -304,5 +307,45 @@ def test_a_vanished_directory_clears_its_timestamps():
 
     idx.list_packages("rhel", "9", "yum")
     idx.list_packages("rhel", "9", "yum")
+
+    assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
+
+
+@pytest.mark.parametrize("stamp,expected", [
+    ("03-Sep-2026 17:58", (2026, 9, 3, 17, 58)),
+    ("06-Feb-2026 11:10", (2026, 2, 6, 11, 10)),
+    ("23-Mar-2025 19:05", (2025, 3, 23, 19, 5)),
+    ("31-Dec-2026 00:00", (2026, 12, 31, 0, 0)),
+])
+def test_index_time_parses_every_month_name(stamp, expected):
+    got = _parse_index_time(stamp)
+    assert (got.year, got.month, got.day, got.hour, got.minute) == expected
+    assert got.tzinfo is timezone.utc
+
+
+@pytest.mark.parametrize("stamp", ["", "   ", "not-a-date", "3-Sep-2026 17:58",
+                                   "31-Feb-2026 10:00", "03-Xxx-2026 17:58",
+                                   "03-Sep-2026", "03-Sep-2026 17:58:22"])
+def test_index_time_rejects_anything_else(stamp):
+    assert _parse_index_time(stamp) is None
+
+
+def test_all_twelve_month_abbreviations_are_recognised():
+    # %b is locale-dependent; the explicit table must cover the whole year.
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    for i, mon in enumerate(months, start=1):
+        assert _parse_index_time(f"01-{mon}-2026 00:00").month == i
+        assert _parse_index_time(f"01-{mon.upper()}-2026 00:00").month == i
+
+
+def test_a_failed_listing_clears_the_old_timestamps():
+    # raise_for_status() on a 5xx must not leave the previous run's times behind.
+    sess = _SwitchingSession([_Resp(YUM_HTML_DATED), _Resp("", 500)])
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.list_packages("rhel", "9", "yum")
+    with pytest.raises(requests.HTTPError):
+        idx.list_packages("rhel", "9", "yum")
 
     assert idx.published_at("rhel", "9", "yum", "aznfs-0.3.49-1.x86_64.rpm") is None
