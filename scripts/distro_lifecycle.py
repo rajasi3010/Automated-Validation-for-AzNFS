@@ -34,14 +34,6 @@ EOL_RELEASES = {
 _UBUNTU_RELEASE_RE = re.compile(r"^Ubuntu (\d{2})\.(\d{2})$")
 
 
-def _extra_eol() -> dict[str, str]:
-    """Labels added through EXTRA_EOL_DISTROS, so a release can be retired
-    without a code change."""
-    raw = os.environ.get("EXTRA_EOL_DISTROS", "")
-    return {label.strip(): "declared EOL via EXTRA_EOL_DISTROS"
-            for label in raw.split(",") if label.strip()}
-
-
 def is_interim_ubuntu(distro_label: str) -> bool:
     """True for Ubuntu non-LTS releases: LTS is an even year with an .04 month."""
     match = _UBUNTU_RELEASE_RE.match(distro_label.strip())
@@ -54,7 +46,7 @@ def is_interim_ubuntu(distro_label: str) -> bool:
 def lifecycle(distro_label: str) -> str:
     """Return ``active`` / ``eol`` / ``interim`` for a distro release label."""
     label = (distro_label or "").strip()
-    if label in EOL_RELEASES or label in _extra_eol():
+    if label in EOL_RELEASES:
         return EOL
     if is_interim_ubuntu(label):
         return INTERIM
@@ -66,7 +58,7 @@ def exclusion_reason(distro_label: str) -> str:
     label = (distro_label or "").strip()
     state = lifecycle(label)
     if state == EOL:
-        return EOL_RELEASES.get(label) or _extra_eol().get(label, "end of life")
+        return EOL_RELEASES[label]
     if state == INTERIM:
         return "Ubuntu interim (non-LTS) release; AzNFS publishes for LTS only"
     return ""

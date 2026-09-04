@@ -36,13 +36,6 @@ def test_non_ubuntu_releases_are_unaffected_by_the_lts_rule():
         assert dl.is_validation_target(label)
 
 
-def test_extra_eol_distros_can_retire_a_release_without_a_code_change(monkeypatch):
-    monkeypatch.setenv("EXTRA_EOL_DISTROS", "RHEL 7, Ubuntu 18.04")
-
-    assert not dl.is_validation_target("RHEL 7")
-    assert dl.exclusion_reason("Ubuntu 18.04").startswith("declared EOL")
-    assert dl.is_validation_target("RHEL 9")
-
 
 def test_enforcement_can_be_switched_off_for_a_full_sweep(monkeypatch):
     monkeypatch.setenv("LIFECYCLE_ENFORCE", "0")
