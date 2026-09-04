@@ -8,16 +8,22 @@ version control where it can be reviewed.
 """
 from __future__ import annotations
 
+import functools
 import logging
+from typing import Any
 
 from lisa.sut_orchestrator.azure import features as _features
 
 logger = logging.getLogger(__name__)
 
-_original_check_or_create_storage_account = _features.check_or_create_storage_account
+_installed = _features.check_or_create_storage_account
+# Re-executing this module reuses its namespace, so reading the patched function
+# back would make the wrapper call itself. Unwrap to the pristine one instead.
+_original_check_or_create_storage_account = getattr(_installed, "__wrapped__", _installed)
 
 
-def _check_or_create_storage_account(*args: object, **kwargs: object) -> object:
+@functools.wraps(_original_check_or_create_storage_account)
+def _check_or_create_storage_account(*args: Any, **kwargs: Any) -> Any:
     """Create LISA's storage accounts with shared-key auth enabled.
 
     ``Nfs.create_share`` creates the file share through the data plane
@@ -32,8 +38,12 @@ def _check_or_create_storage_account(*args: object, **kwargs: object) -> object:
     return _original_check_or_create_storage_account(*args, **kwargs)
 
 
+# functools.wraps copies __module__ from the original, so the patch cannot be
+# recognised by module; tag it explicitly instead.
+_check_or_create_storage_account._aznfs_patched = True  # type: ignore[attr-defined]
+
 # Idempotent: LISA may import this module more than once, and wrapping a wrapper
 # would still work but makes tracebacks harder to read.
-if getattr(_features.check_or_create_storage_account, "__module__", None) != __name__:
+if not getattr(_features.check_or_create_storage_account, "_aznfs_patched", False):
     _features.check_or_create_storage_account = _check_or_create_storage_account
     logger.debug("Patched check_or_create_storage_account to allow shared-key access")

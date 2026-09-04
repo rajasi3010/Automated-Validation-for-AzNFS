@@ -80,15 +80,11 @@ python -m pip install --upgrade pip wheel
 #    package from a resolved commit -- not editable, no checkout left behind.
 # ---------------------------------------------------------------------------
 log "pip install LISA ($LISA_REPO @ $LISA_REF)"
-# Resolve a branch to the commit it points at RIGHT NOW and install that, so the
-# run records exactly which engine it used. Installing "@main" would leave no
-# way to tell afterwards whether the engine moved between two runs.
-if LISA_SHA=$(git ls-remote "$LISA_REPO" "refs/heads/$LISA_REF" | cut -f1) \
-   && [ -n "$LISA_SHA" ]; then
-  echo "$LISA_REF resolves to $LISA_SHA"
-else
-  LISA_SHA="$LISA_REF"   # already a SHA/tag
-fi
+# Resolve to the commit the ref points at RIGHT NOW and install that, so the run
+# records exactly which engine it used. Installing "@main" would leave no way to
+# tell afterwards whether the engine moved between two runs.
+LISA_SHA=$(bash "$_SCRIPT_DIR/resolve_lisa_ref.sh" "$LISA_REPO" "$LISA_REF")
+echo "$LISA_REF resolves to $LISA_SHA"
 # Not editable, and no checkout left behind: pip builds from a temporary clone
 # and installs the result. mslisa on PyPI is upstream LISA and lacks the Nfs
 # feature this suite needs, so it has to come from the fork.
