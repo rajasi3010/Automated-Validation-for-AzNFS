@@ -117,7 +117,8 @@ def _ordered_states(buckets: dict[str, list[dict]]) -> list[str]:
     return _STATE_ORDER + extras
 
 
-def _reminder_table_html(distros: list[dict], with_reason: bool = False) -> str:
+def _reminder_table_html(distros: list[dict], with_reason: bool = False,
+                         with_skus: bool = False) -> str:
     cols = [
         ("distro_label", "Distro"),
         ("version", "Latest version"),
@@ -138,10 +139,26 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False) -> str:
             for key, _ in cols
         )
         body += f"<tr>{cells}</tr>"
+        if with_skus and d.get("skus"):
+            body += (
+                f"<tr><td colspan='{len(cols)}' style='padding:2px 8px 8px 24px;"
+                f"font-size:12px;color:#555'>{_sku_list_html(d['skus'])}</td></tr>"
+            )
     return (
         "<table style='border-collapse:collapse;font-family:Segoe UI,sans-serif;"
         f"font-size:13px'><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
     )
+
+
+def _sku_list_html(skus: list[dict]) -> str:
+    """The exact images behind a distro row, so a failure points at one SKU."""
+    items = ""
+    for s in skus:
+        label = f"{s.get('image', '')}/{s.get('sku', '')} ({s.get('architecture', '')})"
+        reason = f" &mdash; {html.escape(s['reason'])}" if s.get("reason") else ""
+        items += f"<li><code>{html.escape(label)}</code>{reason}</li>"
+    return f"<ul style='margin:2px 0;padding-left:16px'>{items}</ul>"
+
 
 
 def send_monthly_reminder(
@@ -194,6 +211,15 @@ def send_monthly_reminder(
                 if st == "known_unsupported" and d.get("reason"):
                     line += f" -- {d['reason']}"
                 plain_parts.append(line)
+                # Name the exact images that failed: a distro release covers very
+                # different SKUs (server, minimal, cvm, pro, arm64).
+                if st == "known_unsupported":
+                    for s in d.get("skus", []):
+                        sku_line = (f"      * {s.get('image')}/{s.get('sku')} "
+                                    f"({s.get('architecture')})")
+                        if s.get("reason"):
+                            sku_line += f" -- {s['reason']}"
+                        plain_parts.append(sku_line)
         else:
             plain_parts.append("  (none)")
         plain_parts.append("")
@@ -210,7 +236,7 @@ def send_monthly_reminder(
             f"{html.escape(title)} "
             f"<span style='color:#888;font-weight:normal'>({len(rows)})</span></h4>"
             + (
-                _reminder_table_html(rows, with_reason=with_reason)
+                _reminder_table_html(rows, with_reason=with_reason, with_skus=with_reason)
                 if rows
                 else "<p style='font-family:Segoe UI,sans-serif;color:#888'>(none)</p>"
             )
