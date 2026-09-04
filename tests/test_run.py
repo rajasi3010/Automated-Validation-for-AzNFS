@@ -593,3 +593,30 @@ def test_probe_error_retry_is_deduped_against_the_handoff():
     out = run.enrich_and_merge([entry], db, "db")
 
     assert len(out) == 1
+
+
+def _ver_row(sku, version, validated="known_unsupported", source="gate"):
+    return {"publisher": "RedHat", "image": "RHEL", "sku": sku, "region": "eastus",
+            "architecture": "x86_64", "family": "yum", "distro_label": "RHEL 9",
+            "version": version, "validated": validated, "verdict_source": source}
+
+
+def test_representative_is_the_numerically_newest_image():
+    # '9.10.x' is newer than '9.8.x' but sorts BELOW it as a string, so a lexical
+    # compare would re-feed a stale image.
+    db = FakeDbMod(unsupported=[_ver_row("old", "9.8.2026062413"),
+                                _ver_row("new", "9.10.2026062413")])
+
+    out = run.enrich_and_merge([], db, "db")
+
+    assert [r["sku"] for r in out] == ["new"]
+
+
+def test_from_db_representative_is_numerically_newest():
+    db = FakeDbMod()
+    db.get_all_records = lambda path: [_ver_row("old", "9.8.2026062413", "unknown", ""),
+                                       _ver_row("new", "9.10.2026062413", "unknown", "")]
+
+    entries = run.entries_from_db(db, "db", {"rhel 9"})
+
+    assert [e["sku"] for e in entries] == ["new"]

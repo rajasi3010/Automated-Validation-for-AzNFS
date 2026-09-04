@@ -147,7 +147,7 @@ def entries_from_db(
     for r in rows:
         key = (r.get("distro_label", ""), r.get("architecture", ""))
         cur = chosen.get(key)
-        if cur is None or (r.get("version", "") > cur.get("version", "")):
+        if cur is None or _is_newer_image(r, cur):
             chosen[key] = r
     return sorted(
         chosen.values(),
@@ -172,6 +172,16 @@ _SKIP_STATES = frozenset({"pending_validation"})
 _LISA_VERDICT = "lisa"
 # Not a verdict: set when PMC could not be reached, cleared by any real verdict.
 _PROBE_ERROR = "probe_error"
+
+
+def _is_newer_image(row: dict, cur: dict) -> bool:
+    """True when ``row`` carries a newer marketplace version than ``cur``.
+
+    Numeric, not lexical: '9.10.2026...' is newer than '9.8.2026...' but sorts
+    BELOW it as a string, which would pick a stale representative.
+    """
+    return (pmc_packages.version_tuple(row.get("version", ""))
+            > pmc_packages.version_tuple(cur.get("version", "")))
 
 
 def _load_exclusions() -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -295,7 +305,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 continue
             key = (row.get("distro_label", ""), row.get("architecture", ""))
             cur = reps.get(key)
-            if cur is None or (row.get("version", "") > cur.get("version", "")):
+            if cur is None or _is_newer_image(row, cur):
                 reps[key] = row
         for row in reps.values():
             ident = (
@@ -318,7 +328,7 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
                 continue
             key = (row.get("distro_label", ""), row.get("architecture", ""))
             cur = unsupported_reps.get(key)
-            if cur is None or (row.get("version", "") > cur.get("version", "")):
+            if cur is None or _is_newer_image(row, cur):
                 unsupported_reps[key] = row
         for row in unsupported_reps.values():
             ident = (
