@@ -249,6 +249,8 @@ class ProdPackageIndex:
         # aznfs dir url -> {filename: autoindex timestamp}. Replaced wholesale on
         # every listing so a directory's cache never outlives what it now serves.
         self._published_at: dict[str, dict[str, datetime]] = {}
+        # distro segment -> release dirs PMC lists, used to corroborate a 404.
+        self._releases: dict[str, frozenset[str] | None] = {}
 
     @staticmethod
     def _retrying_session(max_retries: int) -> requests.Session:
@@ -264,12 +266,44 @@ class ProdPackageIndex:
         session.mount("http://", HTTPAdapter(max_retries=retry))
         return session
 
-    def _ok(self, url: str) -> bool:
+    def _distro_index(self, distro: str) -> frozenset[str] | None:
+        """Release directories PMC lists under ``/<distro>/``, or None if unreadable.
+
+        Cached per distro segment, so this costs one request per distro per run
+        and only on the 404 path.
+        """
+        if distro in self._releases:
+            return self._releases[distro]
+        url = f"{self.base_url}/{distro}/"
+        result: frozenset[str] | None = None
+        try:
+            resp = self._session.get(url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            logger.warning("Could not read %s to confirm a 404: %s", url, exc)
+        else:
+            if resp.status_code == 404:
+                result = frozenset()  # PMC serves nothing at all for this distro
+            elif 200 <= resp.status_code < 300:
+                names = {h.strip("/").split("/")[-1] for h in _HREF_RE.findall(resp.text)}
+                names -= {"", ".", ".."}
+                # A 200 with no entries is not a healthy index, so treat it as unread.
+                result = frozenset(names) or None
+            else:
+                logger.warning("GET %s -> HTTP %s while confirming a 404", url, resp.status_code)
+        self._releases[distro] = result
+        return result
+
+    def _ok(self, url: str, distro: str | None = None) -> bool:
         """True when the pocket exists, False only when PMC says 404.
 
         Any other non-2xx (403 from a WAF, 401, an un-retried 5xx) proves nothing
         about whether the repo exists, so it raises rather than reporting absence
         -- reporting absence is what recorded permanent verdicts from outages.
+
+        A 404 is corroborated against ``/<distro>/``: a healthy parent index means
+        PMC really is serving content and the 404 is a true absence. If the parent
+        cannot be read, the 404 could be an edge returning a synthetic one during
+        an outage, so it is not trusted either.
         """
         try:
             resp = self._session.get(url, timeout=self.timeout)
@@ -279,6 +313,10 @@ class ProdPackageIndex:
         if 200 <= resp.status_code < 300:
             return True
         if resp.status_code == 404:
+            if distro is not None and self._distro_index(distro) is None:
+                raise ProbeError(
+                    f"GET {url} -> HTTP 404, but /{distro}/ could not be read to "
+                    f"confirm it; treating the absence as unproven")
             return False
         raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
 
@@ -290,7 +328,7 @@ class ProdPackageIndex:
         Returns the resolved version string, or ``None`` when none exist.
         """
         for version in candidates:
-            if self._ok(repo_base_url(distro, version, self.base_url)):
+            if self._ok(repo_base_url(distro, version, self.base_url), distro):
                 logger.debug("resolve_repo(%s): matched version %s of candidates %s",
                              distro, version, candidates)
                 return version

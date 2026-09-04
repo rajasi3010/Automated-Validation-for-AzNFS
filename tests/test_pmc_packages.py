@@ -214,7 +214,9 @@ def test_resolve_repo_returns_first_existing_candidate():
     idx = ProdPackageIndex(base_url=BASE, session=sess)
 
     assert idx.resolve_repo("rhel", ["9.8", "9"], "yum") == "9"
-    assert sess.requested == [repo_base_url("rhel", "9.8", BASE), url9]  # tried minor first
+    # The 404 on the minor is corroborated against /rhel/ before it is believed.
+    assert sess.requested == [repo_base_url("rhel", "9.8", BASE),
+                              f"{BASE}/rhel/", url9]
 
 
 def test_resolve_repo_none_when_no_candidate_exists():
@@ -411,3 +413,58 @@ def test_404_still_means_absent_not_a_probe_failure():
 
     assert prod.resolve_repo("rhel", ["9"], "yum") is None
     assert prod.list_packages("rhel", "9", "yum") == []
+
+
+RHEL_PARENT_INDEX = """
+<a href="../">../</a>
+<a href="8/">8/</a>
+<a href="9/">9/</a>
+<a href="10/">10/</a>
+"""
+
+
+def test_a_404_is_believed_when_the_parent_index_is_healthy():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp(RHEL_PARENT_INDEX)})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    assert idx.resolve_repo("rhel", ["9.6"], "yum") is None
+
+
+def test_a_404_is_not_believed_when_the_parent_cannot_be_read():
+    # An edge serving synthetic 404s during an outage is the one way a network
+    # fault can still look like "the repo does not exist".
+    class _ParentDown(_FakeSession):
+        def get(self, url, timeout=None):
+            if url.endswith("/rhel/"):
+                raise requests.ConnectionError("read timed out")
+            return super().get(url, timeout)
+
+    idx = ProdPackageIndex(base_url=BASE, session=_ParentDown({}))
+
+    with pytest.raises(ProbeError):
+        idx.resolve_repo("rhel", ["9.6"], "yum")
+
+
+def test_a_404_is_not_believed_when_the_parent_index_is_empty():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp("<html>nothing here</html>")})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    with pytest.raises(ProbeError):
+        idx.resolve_repo("rhel", ["9.6"], "yum")
+
+
+def test_a_404_is_believed_when_the_whole_distro_is_absent():
+    # /nosuch/ itself 404s -> PMC genuinely publishes nothing for it.
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({}))
+
+    assert idx.resolve_repo("nosuch", ["9"], "yum") is None
+
+
+def test_the_parent_index_is_read_once_per_distro():
+    sess = _FakeSession({f"{BASE}/rhel/": _Resp(RHEL_PARENT_INDEX)})
+    idx = ProdPackageIndex(base_url=BASE, session=sess)
+
+    idx.resolve_repo("rhel", ["9.6", "9.7"], "yum")
+    idx.resolve_repo("rhel", ["9.8"], "yum")
+
+    assert sess.requested.count(f"{BASE}/rhel/") == 1
