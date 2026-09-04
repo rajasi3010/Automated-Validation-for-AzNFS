@@ -160,6 +160,29 @@ def aznfs_dir_url(distro: str, version: str, family: str, base: str = PROD_BASE)
     return root + "pool/main/a/aznfs/"
 
 
+# Azure Linux nests by sub-repo AND architecture instead of serving one flat
+# Packages/ dir, so its aznfs packages live under several paths. Which sub-repo
+# AzNFS will publish to is not yet known, so all of them are searched.
+NESTED_SUBREPOS = ("base", "ms-oss", "extended", "cloud-native", "ms-non-oss")
+NESTED_ARCHES = ("x86_64", "aarch64")
+_NESTED_LAYOUT_DISTROS = frozenset({"azurelinux"})
+
+
+def aznfs_dir_urls(distro: str, version: str, family: str,
+                   base: str = PROD_BASE) -> list[str]:
+    """Every directory that could list aznfs packages for this repo.
+
+    One entry for the usual flat layout; for Azure Linux, the sub-repo x arch
+    grid. Callers concatenate the listings -- the architecture is recoverable
+    from each rpm filename, so nothing is lost by merging them.
+    """
+    if distro in _NESTED_LAYOUT_DISTROS:
+        root = repo_base_url(distro, version, base)
+        return [f"{root}{sub}/{arch}/Packages/a/"
+                for sub in NESTED_SUBREPOS for arch in NESTED_ARCHES]
+    return [aznfs_dir_url(distro, version, family, base)]
+
+
 # ---------------------------------------------------------------------------
 # aznfs filename parsing (unchanged: identical filename formats on prod)
 # ---------------------------------------------------------------------------
@@ -246,9 +269,10 @@ class ProdPackageIndex:
         self.timeout = timeout if timeout is not None else int(os.environ.get("HTTP_TIMEOUT") or "30")
         retries = max_retries if max_retries is not None else int(os.environ.get("HTTP_MAX_RETRIES") or "3")
         self._session = session or self._retrying_session(retries)
-        # aznfs dir url -> {filename: autoindex timestamp}. Replaced wholesale on
-        # every listing so a directory's cache never outlives what it now serves.
-        self._published_at: dict[str, dict[str, datetime]] = {}
+        # (distro, version, family) -> {filename: autoindex timestamp}. Replaced
+        # wholesale on every listing so a repo's cache never outlives what it now
+        # serves. Keyed by repo, not URL, because Azure Linux spans several dirs.
+        self._published_at: dict[tuple[str, str, str], dict[str, datetime]] = {}
         # distro segment -> release dirs PMC lists, used to corroborate a 404.
         self._releases: dict[str, frozenset[str] | None] = {}
 
@@ -337,10 +361,20 @@ class ProdPackageIndex:
 
     def list_packages(self, distro: str, version: str, family: str) -> list[str]:
         """aznfs package filenames published under this prod path (may be empty)."""
-        url = aznfs_dir_url(distro, version, family, self.base_url)
+        key = (distro, version, family)
         # Drop the previous listing's timestamps up front so NO exit path -- 404,
-        # network error, raise_for_status on a 5xx -- can leave stale ones behind.
-        self._published_at.pop(url, None)
+        # network error, a 5xx -- can leave stale ones behind.
+        self._published_at.pop(key, None)
+        ext = ".rpm" if _is_yum(family) else ".deb"
+        names: list[str] = []
+        stamps: dict[str, datetime] = {}
+        for url in aznfs_dir_urls(distro, version, family, self.base_url):
+            names.extend(self._read_index(url, ext, stamps))
+        self._published_at[key] = stamps
+        return names
+
+    def _read_index(self, url: str, ext: str, stamps: dict[str, datetime]) -> list[str]:
+        """aznfs filenames in one autoindex, recording their publication times."""
         try:
             resp = self._session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
@@ -350,9 +384,6 @@ class ProdPackageIndex:
             return []
         if not (200 <= resp.status_code < 300):
             raise ProbeError(f"GET {url} -> HTTP {resp.status_code}")
-        ext = ".rpm" if _is_yum(family) else ".deb"
-        names: list[str] = []
-        stamps: dict[str, datetime] = {}
         for href, stamp in _INDEX_ENTRY_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             published = _parse_index_time(stamp)
@@ -360,7 +391,7 @@ class ProdPackageIndex:
                 logger.debug("Unparseable PMC timestamp %r for %s", stamp, name)
             else:
                 stamps[name] = published
-        self._published_at[url] = stamps
+        names = []
         for href in _HREF_RE.findall(resp.text):
             name = href.split("/")[-1].split("?")[0]
             if name.lower().startswith("aznfs") and name.lower().endswith(ext):
@@ -373,11 +404,10 @@ class ProdPackageIndex:
                      filename: str) -> datetime | None:
         """When PMC published ``filename``, or None if the index gave no date.
 
-        Only meaningful after ``list_packages`` has read that directory; the
-        autoindex is the only place PMC exposes a publication time.
+        Only meaningful after ``list_packages`` has read that repo; the autoindex
+        is the only place PMC exposes a publication time.
         """
-        url = aznfs_dir_url(distro, version, family, self.base_url)
-        return self._published_at.get(url, {}).get(filename)
+        return self._published_at.get((distro, version, family), {}).get(filename)
 
     def ping(self) -> bool:
         """Lightweight reachability probe (used by pre-flight if wired)."""

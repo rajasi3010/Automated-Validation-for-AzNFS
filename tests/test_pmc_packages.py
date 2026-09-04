@@ -7,6 +7,7 @@ import requests
 
 from src.phase2.pmc_packages import (
     _parse_index_time,
+    aznfs_dir_urls,
     AZNFS_SERIES,
     ProbeError,
     ProdPackageIndex,
@@ -468,3 +469,44 @@ def test_the_parent_index_is_read_once_per_distro():
     idx.resolve_repo("rhel", ["9.8"], "yum")
 
     assert sess.requested.count(f"{BASE}/rhel/") == 1
+
+
+AZL_HTML = """
+<a href="./aznfs-0.3.460-1.x86_64.rpm">aznfs-0.3.460-1.x86_64.rpm</a>   03-Sep-2026 17:58  9.0 MB
+"""
+AZL_HTML_ARM = """
+<a href="./aznfs-0.3.460-1.aarch64.rpm">aznfs-0.3.460-1.aarch64.rpm</a> 03-Sep-2026 17:59  9.0 MB
+"""
+
+
+def test_azure_linux_expands_to_the_subrepo_and_arch_grid():
+    # Azure Linux nests by sub-repo AND arch instead of one flat Packages/ dir.
+    urls = aznfs_dir_urls("azurelinux", "3.0", "yum", BASE)
+
+    assert len(urls) == 10
+    assert f"{BASE}/azurelinux/3.0/prod/base/x86_64/Packages/a/" in urls
+    assert f"{BASE}/azurelinux/3.0/prod/ms-oss/aarch64/Packages/a/" in urls
+    # Every other distro keeps the single flat path.
+    assert aznfs_dir_urls("rhel", "9", "yum", BASE) == [aznfs_dir_url("rhel", "9", "yum", BASE)]
+
+
+def test_azure_linux_merges_packages_found_across_subrepos():
+    # AzNFS may land in any sub-repo; the arch is recoverable from the filename,
+    # so merging the listings loses nothing.
+    pages = {
+        f"{BASE}/azurelinux/3.0/prod/ms-oss/x86_64/Packages/a/": _Resp(AZL_HTML),
+        f"{BASE}/azurelinux/3.0/prod/extended/aarch64/Packages/a/": _Resp(AZL_HTML_ARM),
+    }
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession(pages))
+
+    found = idx.list_packages("azurelinux", "3.0", "yum")
+
+    assert sorted(found) == ["aznfs-0.3.460-1.aarch64.rpm", "aznfs-0.3.460-1.x86_64.rpm"]
+    assert idx.published_at("azurelinux", "3.0", "yum", "aznfs-0.3.460-1.x86_64.rpm") is not None
+
+
+def test_azure_linux_with_no_packages_anywhere_is_empty_not_an_error():
+    # Today's real state: every sub-repo resolves but carries no aznfs.
+    idx = ProdPackageIndex(base_url=BASE, session=_FakeSession({}))
+
+    assert idx.list_packages("azurelinux", "3.0", "yum") == []
