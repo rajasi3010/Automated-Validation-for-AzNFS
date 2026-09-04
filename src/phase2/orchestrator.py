@@ -219,7 +219,8 @@ def gate1_repo_exists(entry: dict, prod: ProdLike) -> GateResult:
 
     resolved = existing[0]
     if len(existing) > 1:
-        want_arch = pmc_packages.normalize_arch(entry.get("architecture", ""), family)
+        arch = entry.get("architecture") or entry.get("arch") or ""
+        want_arch = pmc_packages.normalize_arch(arch, family)
         resolved = max(existing,
                        key=lambda v: _newest_package(prod, segment, v, family, want_arch))
         logger.info("[%s] %s pockets %s both exist -> using /%s/%s/ (newest package)",

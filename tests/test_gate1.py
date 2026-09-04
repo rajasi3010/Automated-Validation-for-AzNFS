@@ -150,3 +150,18 @@ def test_a_broken_listing_does_not_sink_the_healthy_pocket():
         entry(distro_label="RHEL 9.0", family="yum", architecture="x86_64"), prod)
     assert r.passed
     assert r.resolved_version == "9.0"
+
+
+def test_pocket_choice_accepts_the_arch_key_too():
+    # Entries reach Phase 2 with either "architecture" or "arch" (LISA-job
+    # shaped rows use the short key); both must select the same pocket.
+    packages = {
+        ("rhel", "9"): ["aznfs-0.3.100-1.x86_64.rpm"],
+        ("rhel", "9.0"): ["aznfs-0.3.458-1.x86_64.rpm"],
+    }
+    for key in ("architecture", "arch"):
+        prod = FakeProd(repos={"rhel": {"9", "9.0"}}, packages=packages)
+        e = entry(distro_label="RHEL 9.0", family="yum")
+        e.pop("architecture", None)
+        e[key] = "x86_64"
+        assert gate1_repo_exists(e, prod).resolved_version == "9.0", key
