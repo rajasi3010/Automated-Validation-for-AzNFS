@@ -56,10 +56,15 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
     """Group tracked images into per-validation-state buckets for the monthly reminder.
 
     Buckets are ``known_supported`` / ``known_unsupported`` / ``unknown`` (the
-    last also folds in the not-yet-decided ``pending_*`` states). For each
-    (state, distro_label) the latest version observed is kept, with the
-    contributing publishers and the number of SKUs. Returns {state: [distro,...]}.
+    last also folds in the not-yet-decided ``pending_*`` states). Each distro
+    release appears in exactly ONE bucket: the verdict is about the distro, not
+    the individual SKU, so when its SKUs disagree (a niche SKU failed, or holds a
+    stale verdict) the strongest evidence wins -- proven working beats a failed
+    check, which beats never checked. The latest version observed is kept, with
+    the contributing publishers and the number of SKUs.
     """
+    _PRECEDENCE = ("known_supported", "known_unsupported", "unknown")
+
     def _state_of(img: dict) -> str:
         v = img.get("validated", "") or ""
         if v == "known_supported":
@@ -68,21 +73,23 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
             return "known_unsupported"
         return "unknown"  # unknown + pending_publish + pending_validation + new
 
-    groups: dict[tuple[str, str], dict] = {}
+    groups: dict[str, dict] = {}
     for img in records:
         state = _state_of(img)
-        key = (state, img.get("distro_label", ""))
-        g = groups.get(key)
+        label = img.get("distro_label", "")
+        g = groups.get(label)
         if g is None:
             g = {
                 "state": state,
-                "distro_label": key[1],
+                "distro_label": label,
                 "version": img.get("version", ""),
                 "publishers": set(),
                 "sku_count": 0,
                 "reasons": set(),
             }
-            groups[key] = g
+            groups[label] = g
+        if _PRECEDENCE.index(state) < _PRECEDENCE.index(g["state"]):
+            g["state"] = state
         if img.get("publisher"):
             g["publishers"].add(img["publisher"])
         # Marketplace versions sort lexicographically (zero-padded date-style).
@@ -102,7 +109,7 @@ def buckets_by_state(records: list[dict]) -> dict[str, list[dict]]:
                 "version": g["version"],
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
-                "reason": "; ".join(sorted(g["reasons"])),
+                "reason": "; ".join(sorted(g["reasons"])) if g["state"] == "known_unsupported" else "",
             }
         )
     for st in buckets:
