@@ -92,15 +92,29 @@ jobs:
       - name: Ensure LISA engine
         env:
           LISA_VENV: ${{ vars.LISA_VENV }}
+          # Set the LISA_REF repo variable to a SHA to freeze the engine while
+          # chasing a regression; unset it to follow upstream main again.
+          LISA_REF: ${{ vars.LISA_REF }}
         run: |
           set -euo pipefail
           VENV="${LISA_VENV:-$HOME/lisa-venv}"
-          if [ -x "$VENV/bin/lisa" ] || [ -x "$VENV/bin/python" ] && "$VENV/bin/lisa" --help >/dev/null 2>&1; then
-            echo "LISA already present at $VENV; skipping bootstrap."
+          REPO="https://github.com/Azure/azfiles-lisa.git"
+          REF="${LISA_REF:-main}"
+
+          WANT=$(git ls-remote "$REPO" "refs/heads/$REF" | cut -f1)
+          [ -n "$WANT" ] || WANT="$REF"          # REF was already a SHA
+          HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
+
+          if "$VENV/bin/lisa" --help >/dev/null 2>&1 && [[ "$HAVE" == *"$WANT"* ]]; then
+            echo "LISA engine up to date at $WANT"
           else
-            echo "LISA not found at $VENV; running phase3/setup_lisa.sh..."
-            LISA_VENV="$VENV" bash phase3/setup_lisa.sh
+            # Say what moved. If today's run fails and the engine changed, that
+            # is the first thing to suspect -- otherwise an upstream regression
+            # is indistinguishable from an AzNFS one.
+            echo "::notice::LISA engine changing to $WANT (was: ${HAVE:-not installed})"
+            LISA_VENV="$VENV" LISA_REF="$REF" bash phase3/setup_lisa.sh
           fi
+          echo "LISA_ENGINE_SHA=$WANT" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
       # 5. Run the Phase 3 driver: per-distro LISA validation, then record

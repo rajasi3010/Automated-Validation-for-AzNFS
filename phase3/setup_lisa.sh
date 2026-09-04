@@ -6,29 +6,35 @@
 # `lisa run`:
 #
 #   1. system build deps (apt)               -- needs sudo; skipped if missing
-#   2. the LISA engine source (azfiles-lisa) -- cloned/updated into LISA_SRC
+#   2. the LISA engine, pip-installed from the pinned commit (no checkout)
 #   3. a Python venv at LISA_VENV            -- created if absent
-#   4. LISA installed editable '.[azure]'    -- the `lisa` CLI on PATH
+#   4. the `lisa` CLI available in that venv
 #   5. the project's own requirements        -- so the in-venv driver + ACS
 #                                               e-mail notifier work too
 #   6. a smoke check                         -- `lisa --help` resolves
 #
-# Re-runnable: re-cloning -> git pull, existing venv reused. Override any of the
+# Re-runnable: reinstalling is idempotent, existing venv reused. Override any of the
 # paths/refs via env vars (defaults match the workflow's LISA_VENV default).
 #
 #   LISA_VENV   venv dir            (default: $HOME/lisa-venv)
-#   LISA_SRC    engine checkout dir (default: $HOME/azfiles-lisa)
 #   LISA_REPO   engine git URL      (default: https://github.com/Azure/azfiles-lisa.git)
-#   LISA_REF    engine git ref      (default: main)
+#   LISA_REF    engine branch/SHA   (default: main -- resolved to a SHA per run)
 #   REQUIREMENTS  project reqs file (default: autodetected from repo root)
+#
+# The engine is installed as an ordinary package straight from git -- no source
+# checkout is kept, so there is nothing on the runner to hand-edit and nothing
+# that can drift unnoticed. Fixes we carry against it live in
+# phase3/testsuites/_lisa_fixes.py, which LISA loads as a runbook extension.
 #
 # Usage (on the runner):
 #   bash phase3/setup_lisa.sh
 set -euo pipefail
 
 LISA_VENV="${LISA_VENV:-$HOME/lisa-venv}"
-LISA_SRC="${LISA_SRC:-$HOME/azfiles-lisa}"
 LISA_REPO="${LISA_REPO:-https://github.com/Azure/azfiles-lisa.git}"
+# Follows upstream main so engine fixes arrive without anyone chasing them. Set
+# LISA_REF to a SHA (env or the LISA_REF repo variable) to freeze it -- worth
+# doing while chasing a regression, so the engine stops moving under you.
 LISA_REF="${LISA_REF:-main}"
 
 # LISA + its deps are public packages: pin pip to public PyPI so a stray private
@@ -60,18 +66,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. LISA engine source (clone or update).
-# ---------------------------------------------------------------------------
-log "LISA engine source -> $LISA_SRC ($LISA_REPO @ $LISA_REF)"
-if [ -d "$LISA_SRC/.git" ]; then
-  git -C "$LISA_SRC" fetch --depth 1 origin "$LISA_REF"
-  git -C "$LISA_SRC" checkout -q "$LISA_REF"
-  git -C "$LISA_SRC" reset --hard -q "origin/$LISA_REF"
-else
-  git clone --depth 1 --branch "$LISA_REF" "$LISA_REPO" "$LISA_SRC"
-fi
-
-# ---------------------------------------------------------------------------
 # 3. Python venv.
 # ---------------------------------------------------------------------------
 log "venv -> $LISA_VENV"
@@ -85,8 +79,20 @@ python -m pip install --upgrade pip wheel
 # ---------------------------------------------------------------------------
 # 4. LISA engine (editable, azure extra only -- NOT libvirt).
 # ---------------------------------------------------------------------------
-log "pip install LISA (editable, .[azure])"
-pip install --editable "$LISA_SRC/.[azure]" --config-settings editable_mode=compat
+log "pip install LISA ($LISA_REPO @ $LISA_REF)"
+# Resolve a branch to the commit it points at RIGHT NOW and install that, so the
+# run records exactly which engine it used. Installing "@main" would leave no
+# way to tell afterwards whether the engine moved between two runs.
+if LISA_SHA=$(git ls-remote "$LISA_REPO" "refs/heads/$LISA_REF" | cut -f1) \
+   && [ -n "$LISA_SHA" ]; then
+  echo "$LISA_REF resolves to $LISA_SHA"
+else
+  LISA_SHA="$LISA_REF"   # already a SHA/tag
+fi
+# Not editable, and no checkout left behind: pip builds from a temporary clone
+# and installs the result. mslisa on PyPI is upstream LISA and lacks the Nfs
+# feature this suite needs, so it has to come from the fork.
+pip install --upgrade "mslisa[azure] @ git+${LISA_REPO}@${LISA_SHA}"
 
 # ---------------------------------------------------------------------------
 # 5. Project requirements (the driver runs in THIS venv and lazily imports the
@@ -104,6 +110,6 @@ fi
 # ---------------------------------------------------------------------------
 log "verify"
 lisa --help >/dev/null 2>&1 && echo "OK: lisa CLI resolves in $LISA_VENV"
-echo "LISA engine: $LISA_SRC"
+echo "LISA engine: $(pip freeze | grep -i mslisa || echo mslisa)"
 echo "Activate with: source $LISA_VENV/bin/activate"
 echo "Set the workflow repo variable LISA_VENV=$LISA_VENV"
