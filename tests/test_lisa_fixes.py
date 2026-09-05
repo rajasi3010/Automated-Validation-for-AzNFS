@@ -10,8 +10,11 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from pathlib import Path
 
 import pytest
+
+EXTENSION_DIR = Path(__file__).resolve().parents[1] / "phase3" / "testsuites"
 
 
 def _install_stub_engine(monkeypatch):
@@ -28,7 +31,7 @@ def _install_stub_engine(monkeypatch):
     for name in ("lisa", "lisa.sut_orchestrator", "lisa.sut_orchestrator.azure"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
     monkeypatch.setitem(sys.modules, "lisa.sut_orchestrator.azure.features", features)
-    monkeypatch.syspath_prepend("phase3/testsuites")
+    monkeypatch.syspath_prepend(str(EXTENSION_DIR))
     monkeypatch.delitem(sys.modules, "_lisa_fixes", raising=False)
     return features, calls, check_or_create_storage_account
 

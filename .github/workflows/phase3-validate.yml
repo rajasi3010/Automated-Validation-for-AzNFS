@@ -101,9 +101,9 @@ jobs:
           REPO="https://github.com/Azure/azfiles-lisa.git"
           REF="${LISA_REF:-main}"
 
-          # A bare runner may not have git yet; setup_lisa.sh installs it. Only
-          # ask upstream where the ref points when we can -- otherwise bootstrap
-          # first and read back whatever pip ended up installing.
+          # Resolve upstream only when git is here. setup_lisa.sh's apt step is
+          # best-effort (it needs sudo), so it cannot be relied on to supply git
+          # -- but pip needs it to clone, and that failure is loud and specific.
           WANT=""
           if command -v git >/dev/null 2>&1; then
             WANT=$(bash phase3/resolve_lisa_ref.sh "$REPO" "$REF")
