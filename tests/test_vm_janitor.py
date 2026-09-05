@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 from datetime import datetime, timezone
 
 os.environ.setdefault("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
@@ -313,3 +315,71 @@ def test_a_naive_timestamp_is_read_as_utc_not_local(monkeypatch):
     # could keep a VM that is actually past the cutoff.
     assert vm_janitor._parse_created("2026-08-26T11:35:24") == \
         vm_janitor._parse_created("2026-08-26T11:35:24+00:00")
+
+
+def test_every_az_call_is_pinned_to_the_subscription(monkeypatch):
+    # These commands delete things; the CLI would otherwise use whatever
+    # subscription happens to be the runner's default -- and the workflow logs
+    # in with --allow-no-subscriptions, so there may not be one.
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-1234")
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(vm_janitor.subprocess, "run", fake_run)
+    vm_janitor._az("vm", "delete", "--ids", "/id/one")
+
+    assert "--subscription" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--subscription") + 1] == "sub-1234"
+
+
+def test_no_subscription_set_still_runs(monkeypatch):
+    class _Proc:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+
+    seen = {}
+    monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(vm_janitor.subprocess, "run", fake_run)
+    vm_janitor._az("vm", "list")
+
+    assert "--subscription" not in seen["cmd"]
+
+
+def test_the_alert_reads_correctly_without_a_resource_group(monkeypatch):
+    # scope is a tag selector in the unpinned mode, so "the resource group ..."
+    # would have been wrong.
+    sent = {}
+    notifier = types.ModuleType("notifier")
+    notifier.notify = lambda **kw: sent.update(kw)
+    monkeypatch.setitem(sys.modules, "notifier", notifier)
+
+    vm_janitor._alert("the groups tagged created_by=aznfs-phase3", "1 group outlived its run")
+
+    assert "the resource group the groups tagged" not in sent["plain"]
+    assert "Check the groups tagged created_by=aznfs-phase3" in sent["plain"]
+
+
+def test_vms_come_back_oldest_first_regardless_of_offset(monkeypatch):
+    # Sorting the raw strings puts "+05:30" before "+00:00" for the same instant.
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [
+        _vm("newer", "2026-08-26T12:00:00+00:00"),
+        _vm("oldest", "2026-08-26T11:00:00-05:00"),   # 16:00Z -> actually newest
+        _vm("unreadable", "not-a-date"),
+    ] if a[:2] == ("vm", "list") else None)
+
+    order = [v["name"] for v in vm_janitor.stale_vms("rg", 0)]
+    assert order[0] == "unreadable"          # unparseable counts as very old
+    assert order.index("newer") < order.index("oldest")

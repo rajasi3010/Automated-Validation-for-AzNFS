@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -47,9 +48,17 @@ OWNER_VALUE = "aznfs-phase3"
 
 
 def _az(*args: str) -> object:
-    """Run an `az` command and return its parsed JSON output."""
+    """Run an `az` command and return its parsed JSON output.
+
+    Pinned to AZURE_SUBSCRIPTION_ID when set: these commands delete things, and
+    the CLI would otherwise use whatever subscription happens to be the default
+    on the runner. The workflow logs in with --allow-no-subscriptions, so there
+    may not even be one.
+    """
+    subscription = os.environ.get("AZURE_SUBSCRIPTION_ID", "").strip()
+    scope = ["--subscription", subscription] if subscription else []
     proc = subprocess.run(
-        ["az", *args, "--output", "json"],
+        ["az", *args, *scope, "--output", "json"],
         capture_output=True, text=True, check=False,
     )
     if proc.returncode != 0:
@@ -75,20 +84,26 @@ def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
     everything (safe straight after a run, which holds the only Phase 3 slot),
     a few hours suits a scheduled sweep.
     """
+    # Sorted on the parsed time, not the raw string: offsets and missing values
+    # do not sort sensibly as text. An unreadable timestamp counts as very old,
+    # matching the eligibility rule below.
+    oldest_first = datetime.min.replace(tzinfo=timezone.utc)
+
     vms = _az("vm", "list", "-g", resource_group,
               "--query", "[].{name:name, id:id, created:timeCreated}") or []
     if older_than_hours <= 0:
-        return sorted(vms, key=lambda v: v.get("created") or "")
+        return sorted(vms, key=lambda v: _parse_created(v.get("created", "")) or oldest_first)
+
     cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
-    keep: list[dict] = []
+    eligible: list[dict] = []
     for vm in vms:
         created = _parse_created(vm.get("created", ""))
         if created is None or created < cutoff:
-            keep.append(vm)
+            eligible.append(vm)
         else:
             logger.info("Keeping %s: created %s, newer than the cutoff",
                         vm.get("name"), vm.get("created"))
-    return sorted(keep, key=lambda v: v.get("created") or "")
+    return sorted(eligible, key=lambda v: _parse_created(v.get("created", "")) or oldest_first)
 
 
 def _delete_each(kind: str, ids: list[str], *cmd: str) -> tuple[int, int]:
@@ -261,7 +276,8 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    scope = args.resource_group or f"groups tagged {OWNER_TAG}={OWNER_VALUE}"
+    scope = (f"resource group {args.resource_group}" if args.resource_group
+             else f"the groups tagged {OWNER_TAG}={OWNER_VALUE}")
     try:
         if args.resource_group:
             result = sweep(args.resource_group, args.older_than_hours, args.dry_run)
@@ -293,15 +309,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _alert(resource_group: str, detail: str) -> None:
-    """Mail the team; a silent cleanup failure is what let 103 VMs accumulate."""
+def _alert(scope: str, detail: str) -> None:
+    """Mail the team; a silent cleanup failure is what let 103 VMs accumulate.
+
+    ``scope`` is a resource group name or a tag selector, so the wording has to
+    read correctly for both.
+    """
     try:
         import notifier
         notifier.notify(
-            subject=f"[AzNFS pipeline] Phase 3 VM cleanup needs attention ({resource_group})",
-            plain=(f"Phase 3 leaves VMs behind unless they are swept explicitly, and "
-                   f"{detail}.\n\nCheck the resource group {resource_group}: every VM "
-                   f"left running is billed until it is removed."),
+            subject=f"[AzNFS pipeline] Phase 3 VM cleanup needs attention ({scope})",
+            plain=(f"Phase 3 leaves Azure resources behind unless they are swept, and "
+                   f"{detail}.\n\nCheck {scope}: every VM left running is billed "
+                   f"until it is removed."),
         )
     except Exception:  # noqa: BLE001 - never let the alert break the run
         logger.exception("Could not send the cleanup alert")
