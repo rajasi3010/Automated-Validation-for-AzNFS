@@ -507,9 +507,12 @@ def test_a_dry_run_alert_does_not_claim_a_sweep_happened(monkeypatch):
 
     vm_janitor.main(["--resource-group", "rg", "--dry-run", "--alert"])
 
-    assert "survived the sweep" not in alerts[0]
     assert alerts[0].startswith("[dry run]")
-    assert "would survive a sweep" in alerts[0]
+    assert "nothing was actually deleted" in alerts[0]
+    # The candidates would be DELETED, not survive -- saying otherwise inverts
+    # the meaning of the alert.
+    assert "survive" not in alerts[0]
+    assert "1 VM(s) would be deleted" in alerts[0]
 
 
 def test_a_dry_run_group_alert_does_not_claim_deletions_were_attempted(monkeypatch):

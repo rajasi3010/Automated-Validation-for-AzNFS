@@ -276,7 +276,9 @@ def sweep(resource_group: str, older_than_hours: float,
         return {"deleted_vms": 0, "eligible": len(victims), "failures": 0,
                 "orphans": {"private_endpoints": 0, "nics": 0, "public_ips": 0,
                             "disks": 0, "storage": 0},
-                "remaining": len(victims),
+                # No deletion was attempted, so nothing survived one. What a
+                # real run would remove is `eligible`.
+                "remaining": 0,
                 "undatable": _undatable_count(resource_group)}
 
     # One at a time: a bulk `az vm delete --ids` aborts the whole sweep if any
@@ -360,15 +362,20 @@ def main(argv: list[str] | None = None) -> int:
                 result["deleted_vms"], result["orphans"],
                 result.get("failures", 0), result["remaining"],
                 result.get("undatable", 0))
-    if args.alert and (result["remaining"] or result.get("failures")
-                       or result.get("undatable")):
+    if args.dry_run:
+        # Report what a real run WOULD remove. Saying these VMs "survived"
+        # inverts the meaning: they are the deletion candidates.
+        if args.alert and (result["eligible"] or result.get("undatable")):
+            _alert(scope,
+                   f"[dry run] {result['eligible']} VM(s) would be deleted and "
+                   f"{result.get('undatable', 0)} left running because their age "
+                   f"could not be read; nothing was actually deleted")
+    elif args.alert and (result["remaining"] or result.get("failures")
+                         or result.get("undatable")):
         # "still present" would contradict itself: remaining counts only the
         # ELIGIBLE survivors, so it can be 0 while undatable VMs are running.
-        # A dry run deleted nothing, so it must not claim a sweep happened.
-        outcome = "would survive a sweep" if args.dry_run else "survived the sweep"
         _alert(scope,
-               f"{'[dry run] ' if args.dry_run else ''}"
-               f"{result['remaining']} eligible VM(s) {outcome}, "
+               f"{result['remaining']} eligible VM(s) survived the sweep, "
                f"{result.get('undatable', 0)} were left running because their age "
                f"could not be read, and {result.get('failures', 0)} resource(s) "
                f"could not be deleted")
