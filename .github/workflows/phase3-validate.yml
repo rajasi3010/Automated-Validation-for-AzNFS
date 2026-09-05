@@ -229,9 +229,12 @@ jobs:
           # Phase 3 holds the only marketplace-db slot, so nothing else owns a
           # VM here and everything from this run is finished with. With no RG
           # pinned the janitor sweeps the tagged groups LISA failed to delete.
-          PYTHONPATH=scripts python scripts/vm_janitor.py \
-            ${PHASE3_RESOURCE_GROUP:+--resource-group "$PHASE3_RESOURCE_GROUP"} \
-            --older-than-hours 0 --alert
+          # Built as an array so the RG name is unambiguously one argument.
+          ARGS=(--older-than-hours 0 --alert)
+          if [ -n "${PHASE3_RESOURCE_GROUP:-}" ]; then
+            ARGS=(--resource-group "$PHASE3_RESOURCE_GROUP" "${ARGS[@]}")
+          fi
+          PYTHONPATH=scripts python scripts/vm_janitor.py "${ARGS[@]}"
 
       # ----------------------------------------------------------------
       # 6. Refresh the committed status page with the fresh verdicts.
