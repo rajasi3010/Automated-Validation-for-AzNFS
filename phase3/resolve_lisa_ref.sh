@@ -12,7 +12,10 @@ set -euo pipefail
 REPO="${1:?usage: resolve_lisa_ref.sh <repo-url> <ref>}"
 REF="${2:?usage: resolve_lisa_ref.sh <repo-url> <ref>}"
 
-REFS=$(git ls-remote "$REPO" "refs/heads/$REF" "refs/tags/$REF" "refs/tags/$REF^{}" 2>/dev/null || true)
+# A ref that does not exist is not an error here -- ls-remote exits 0 with empty
+# output -- so let a real failure (unreachable host, no access) surface as one
+# instead of being reported below as a bad ref.
+REFS=$(git ls-remote "$REPO" "refs/heads/$REF" "refs/tags/$REF" "refs/tags/$REF^{}")
 
 # An annotated tag resolves to the tag object, not the commit; the ^{} entry is
 # the commit it wraps, so prefer that when it exists. A miss is normal here, so
@@ -29,4 +32,5 @@ if [ -z "$SHA" ]; then
   fi
 fi
 
-printf '%s\n' "$SHA"
+# Canonical lowercase, so the installed URL and the recorded SHA always match.
+printf '%s\n' "$SHA" | tr '[:upper:]' '[:lower:]'

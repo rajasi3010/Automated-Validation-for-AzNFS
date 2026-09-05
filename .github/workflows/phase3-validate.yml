@@ -109,9 +109,11 @@ jobs:
             WANT=$(bash phase3/resolve_lisa_ref.sh "$REPO" "$REF")
           fi
           # Compare commit to commit: pip records the URL it cloned, so a plain
-          # substring test could match on any part of it.
+          # substring test could match on any part of it. Missing venv is fine --
+          # HAVE is empty and we bootstrap.
           HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
-          HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-f]\{7,40\}\).*/\1/p')
+          HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-fA-F]\{7,40\}\).*/\1/p' |
+            tr '[:upper:]' '[:lower:]')
 
           if [ -n "$WANT" ] && [ -n "$HAVE_SHA" ] \
              && "$VENV/bin/lisa" --help >/dev/null 2>&1 \
@@ -124,7 +126,8 @@ jobs:
             echo "::notice::LISA engine changing to ${WANT:-upstream $REF} (was: ${HAVE_SHA:-not installed})"
             LISA_VENV="$VENV" LISA_REF="$REF" bash phase3/setup_lisa.sh
             HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
-            HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-f]\{7,40\}\).*/\1/p')
+            HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-fA-F]\{7,40\}\).*/\1/p' |
+              tr '[:upper:]' '[:lower:]')
           fi
           # Record what is installed, not what we hoped for.
           echo "LISA_ENGINE_SHA=${WANT:-${HAVE_SHA:-unknown}}" >> "$GITHUB_ENV"
