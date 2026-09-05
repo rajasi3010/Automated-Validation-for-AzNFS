@@ -147,9 +147,9 @@ def _delete_orphans(resource_group: str,
     """
     removed = {"private_endpoints": 0, "nics": 0, "public_ips": 0, "disks": 0, "storage": 0}
     failures = 0
-    # The `az network *` deletes take no --yes and reject it as an unrecognized
-    # argument; they do not prompt. `az disk/storage account` do take it.
 
+    # The `az network *` deletes reject --yes as an unrecognized argument and do
+    # not prompt; `az disk`/`az storage account` below do take it.
     if not detached_only:
         endpoints = _az("network", "private-endpoint", "list", "-g", resource_group,
                         "--query", "[].id") or []
