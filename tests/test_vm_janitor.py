@@ -121,7 +121,7 @@ def test_survivors_raise_an_alert(monkeypatch):
     monkeypatch.setattr(vm_janitor, "_alert", lambda rg, detail: alerts.append(detail))
 
     assert vm_janitor.main(["--resource-group", "rg", "--alert"]) == 0
-    assert "7 VM(s) still present" in alerts[0]
+    assert "7 eligible VM(s) survived the sweep" in alerts[0]
 
 
 def test_a_failed_sweep_alerts_and_reports_failure(monkeypatch):
@@ -468,7 +468,10 @@ def test_a_kept_undatable_vm_still_alerts(monkeypatch):
     assert vm_janitor.main(["--resource-group", "rg",
                             "--older-than-hours", "24", "--alert"]) == 0
     assert len(alerts) == 1
-    assert "could not be dated" in alerts[0]
+    # Must not read "0 VM(s) still present" while one is in fact running:
+    # remaining counts only the ELIGIBLE survivors.
+    assert "eligible VM(s) survived" in alerts[0]
+    assert "1 were left running because their age could not be read" in alerts[0]
 
 
 def test_dry_run_predicts_the_alert_a_real_run_would_raise(monkeypatch):

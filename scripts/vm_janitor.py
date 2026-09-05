@@ -346,10 +346,13 @@ def main(argv: list[str] | None = None) -> int:
                 result.get("undatable", 0))
     if args.alert and (result["remaining"] or result.get("failures")
                        or result.get("undatable")):
+        # "still present" would contradict itself: remaining counts only the
+        # ELIGIBLE survivors, so it can be 0 while undatable VMs are running.
         _alert(scope,
-               f"{result['remaining']} VM(s) still present, "
-               f"{result.get('undatable', 0)} could not be dated so were left alone, "
-               f"and {result.get('failures', 0)} resource(s) could not be deleted")
+               f"{result['remaining']} eligible VM(s) survived the sweep, "
+               f"{result.get('undatable', 0)} were left running because their age "
+               f"could not be read, and {result.get('failures', 0)} resource(s) "
+               f"could not be deleted")
     return 0
 
 
