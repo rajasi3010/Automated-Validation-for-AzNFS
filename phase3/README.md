@@ -1,9 +1,11 @@
 # Phase 3 — LISA artifacts
 
-These are the **authored LISA artifacts** for Phase 3 AzNFS validation. They are
-kept here as the source of truth; to run them they are placed into a checkout of
-[Azure/azfiles-lisa](https://github.com/Azure/azfiles-lisa) (LISA discovers test
-suites by scanning the runbook's `extension:` paths).
+These are the **authored LISA artifacts** for Phase 3 AzNFS validation. LISA
+loads them straight from this repo -- the runbook's `extension:` path points at
+`testsuites/`, so nothing is copied anywhere and this is the only source of
+truth. The engine itself ([Azure/azfiles-lisa](https://github.com/Azure/azfiles-lisa))
+is installed as an ordinary pinned package by `setup_lisa.sh`; there is no
+engine checkout.
 
 See [`../docs/PHASE3.md`](../docs/PHASE3.md) for the full test plan.
 
@@ -12,28 +14,27 @@ See [`../docs/PHASE3.md`](../docs/PHASE3.md) for the full test plan.
 | File | What it is |
 |------|------------|
 | `testsuites/aznfs_validation.py` | The `AzNfsValidation` LISA test suite (3 cases, 5 tiers) |
+| `testsuites/_lisa_fixes.py` | Fixes applied to the engine at import time (see below) |
 | `testsuites/__init__.py` | Package marker |
 | `runbooks/aznfs_validation.yml` | LISA runbook (platform + `aznfs_*` inputs) |
 | `orchestrator/` | Records the verdict in the DB + sends one summary e-mail (not a LISA test) |
 | `run_phase3.py` | **Automation driver**: lisa_jobs.json → LISA → record_result |
+| `setup_lisa.sh` | Installs the engine + deps into the venv |
+| `resolve_lisa_ref.sh` | Resolves a branch/tag/SHA to the commit to install |
 | `AUTOMATION.md` | How Phase 3 runs end-to-end with no human in the loop |
 | `examples/jobs.example.json` | Sample Phase 2 input for the driver |
 
 See [`AUTOMATION.md`](AUTOMATION.md) for the automated end-to-end scenario.
 
-## Placement in azfiles-lisa
+## Fixes carried against the engine
 
-```
-azfiles-lisa/
-  lisa/microsoft/testsuites/azfiles/
-    __init__.py            <- testsuites/__init__.py
-    aznfs_validation.py    <- testsuites/aznfs_validation.py
-  runbooks/
-    aznfs_validation.yml   <- runbooks/aznfs_validation.yml
-```
+`testsuites/_lisa_fixes.py` patches LISA at import time (LISA imports every
+module under the extension path). Today it defaults storage accounts to
+`allow_shared_key_access=True`, without which `Nfs.create_share` cannot list the
+account keys and every NFS test fails before it mounts anything.
 
-Anything under `lisa/microsoft/testsuites/` is auto-discovered (the existing
-runbooks already `extension: ../../testsuites`), so no extra wiring is needed.
+Keeping it here rather than editing an engine checkout means it is in version
+control, survives every reinstall, and cannot be lost when the engine updates.
 
 ## Test cases
 

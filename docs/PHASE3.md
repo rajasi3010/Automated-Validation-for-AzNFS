@@ -168,18 +168,16 @@ suite directly from this repo — no copying.
 1. Use a WSL distro on the **Linux filesystem** (not `/mnt/c` — DrvFs cannot set
    the venv symlinks or the `600` perms LISA needs on the SSH key). Confirm which
    distro with `wsl --list --verbose`; run everything in the same one.
-2. Install the LISA engine (editable) from an `azfiles-lisa` checkout placed in
-   the Linux home, into a venv in the Linux home:
+2. Install the LISA engine into a venv in the Linux home. `setup_lisa.sh` does
+   the whole thing -- build deps, venv, and the engine pinned to the commit
+   upstream `main` points at right now:
    ```bash
-   sudo apt update
-   sudo apt install -y git gcc libgirepository1.0-dev libcairo2-dev \
-     qemu-utils libvirt-dev python3-pip python3-venv unixodbc-dev
-   python3 -m venv ~/lisa-venv
-   source ~/lisa-venv/bin/activate
-   pip install --upgrade pip
-   # from the azfiles-lisa checkout (the engine). '.[azure]' only (NOT libvirt).
-   pip install --editable '.[azure]' --config-settings editable_mode=compat
+   bash phase3/setup_lisa.sh
    ```
+   Set `LISA_REF` to a SHA first to freeze the engine while chasing a
+   regression. There is no engine checkout to maintain: it is installed as an
+   ordinary package straight from git, and the fixes we carry against it live
+   in `phase3/testsuites/_lisa_fixes.py`.
 3. Verify: `lisa` (runs the local hello-world sample) should pass.
 
 ### Each run

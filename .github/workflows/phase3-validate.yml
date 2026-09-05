@@ -92,15 +92,49 @@ jobs:
       - name: Ensure LISA engine
         env:
           LISA_VENV: ${{ vars.LISA_VENV }}
+          # Set the LISA_REF repo variable to a SHA to freeze the engine while
+          # chasing a regression; unset it to follow upstream main again.
+          LISA_REF: ${{ vars.LISA_REF }}
         run: |
           set -euo pipefail
           VENV="${LISA_VENV:-$HOME/lisa-venv}"
-          if [ -x "$VENV/bin/lisa" ] || [ -x "$VENV/bin/python" ] && "$VENV/bin/lisa" --help >/dev/null 2>&1; then
-            echo "LISA already present at $VENV; skipping bootstrap."
-          else
-            echo "LISA not found at $VENV; running phase3/setup_lisa.sh..."
-            LISA_VENV="$VENV" bash phase3/setup_lisa.sh
+          REPO="https://github.com/Azure/azfiles-lisa.git"
+          REF="${LISA_REF:-main}"
+
+          # Resolve upstream only when git is here. setup_lisa.sh's apt step is
+          # best-effort (it needs sudo), so it cannot be relied on to supply git
+          # -- but pip needs it to clone, and that failure is loud and specific.
+          WANT=""
+          if command -v git >/dev/null 2>&1; then
+            WANT=$(bash phase3/resolve_lisa_ref.sh "$REPO" "$REF")
           fi
+          # Compare commit to commit: pip records the URL it cloned, so a plain
+          # substring test could match on any part of it. Missing venv is fine --
+          # HAVE is empty and we bootstrap.
+          HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
+          HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-fA-F]\{7,40\}\).*/\1/p' |
+            tr '[:upper:]' '[:lower:]')
+
+          if [ -n "$WANT" ] && [ -n "$HAVE_SHA" ] \
+             && "$VENV/bin/lisa" --help >/dev/null 2>&1 \
+             && { [[ "$WANT" == "$HAVE_SHA"* ]] || [[ "$HAVE_SHA" == "$WANT"* ]]; }; then
+            echo "LISA engine up to date at $WANT"
+          else
+            # Say what moved. If today's run fails and the engine changed, that
+            # is the first thing to suspect -- otherwise an upstream regression
+            # is indistinguishable from an AzNFS one.
+            echo "::notice::LISA engine changing to ${WANT:-upstream $REF} (was: ${HAVE_SHA:-not installed})"
+            # Hand over the commit we resolved, not the branch: re-resolving in
+            # setup_lisa.sh could land on a different one if main moves between
+            # the two lookups.
+            LISA_VENV="$VENV" LISA_REF="${WANT:-$REF}" bash phase3/setup_lisa.sh
+            HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
+            HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-fA-F]\{7,40\}\).*/\1/p' |
+              tr '[:upper:]' '[:lower:]')
+          fi
+          # What pip actually installed wins: attribution is worthless if it
+          # names a commit the run did not use.
+          echo "LISA_ENGINE_SHA=${HAVE_SHA:-${WANT:-unknown}}" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
       # 5. Run the Phase 3 driver: per-distro LISA validation, then record
