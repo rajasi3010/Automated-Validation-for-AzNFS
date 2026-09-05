@@ -293,3 +293,23 @@ def test_private_endpoint_nics_are_not_selected_directly(monkeypatch):
     vm_janitor.sweep("rg", 0)
 
     assert queries and "privateEndpoint==null" in queries[0]
+
+
+def test_a_timestamp_without_an_offset_does_not_abort_the_sweep(monkeypatch):
+    # datetime.fromisoformat happily returns a naive datetime, which cannot be
+    # compared with the aware cutoff -- that TypeError would abort the sweep
+    # and quietly resume the leak.
+    def fake_az(*args):
+        if args[:2] == ("vm", "list"):
+            return [_vm("old", "2026-08-26T11:35:24")]     # no offset
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    assert [v["name"] for v in vm_janitor.stale_vms("rg", 24)] == ["old"]
+
+
+def test_a_naive_timestamp_is_read_as_utc_not_local(monkeypatch):
+    # Reading it as local time would shift the age by the runner's offset and
+    # could keep a VM that is actually past the cutoff.
+    assert vm_janitor._parse_created("2026-08-26T11:35:24") == \
+        vm_janitor._parse_created("2026-08-26T11:35:24+00:00")

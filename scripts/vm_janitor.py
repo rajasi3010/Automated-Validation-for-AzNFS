@@ -59,9 +59,13 @@ def _az(*args: str) -> object:
 
 def _parse_created(value: str) -> datetime | None:
     try:
-        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
     except ValueError:
         return None
+    # fromisoformat accepts a string with no offset and returns a naive datetime,
+    # which cannot be compared against the aware cutoff -- that TypeError would
+    # abort the sweep and quietly resume the leak.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
@@ -207,7 +211,14 @@ def sweep_orphan_groups(older_than_hours: float, dry_run: bool = False) -> dict:
 
 def sweep(resource_group: str, older_than_hours: float,
           dry_run: bool = False) -> dict:
-    """Delete stale VMs and their orphans. Returns what was removed and left."""
+    """Delete stale VMs and their orphans. Returns what was removed and left.
+
+    With ``older_than_hours`` at 0 this is the AGGRESSIVE path: everything in
+    the group goes, including private endpoints and storage accounts that
+    nothing marks as detached. Only run it against a group known to be idle --
+    straight after a run, which holds the only Phase 3 slot. Any cutoff above 0
+    restricts it to what is provably unused, so a live environment survives.
+    """
     victims = stale_vms(resource_group, older_than_hours)
     logger.info("%d VM(s) eligible for deletion in %s", len(victims), resource_group)
 
