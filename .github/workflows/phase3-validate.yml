@@ -223,18 +223,15 @@ jobs:
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
           PHASE3_RESOURCE_GROUP: ${{ vars.PHASE3_RESOURCE_GROUP }}
         run: |
-          set -uo pipefail
-          RG="${PHASE3_RESOURCE_GROUP:-}"
-          if [ -z "$RG" ]; then
-            echo "No pinned RG; LISA deletes its own per-run groups."
-            exit 0
-          fi
+          set -euo pipefail
           az login --identity --client-id "${AZURE_CLIENT_ID}" \
             --allow-no-subscriptions >/dev/null
-          # Phase 3 holds the only marketplace-db slot, so no other run owns a
-          # VM here and everything in the group is finished with.
+          # Phase 3 holds the only marketplace-db slot, so nothing else owns a
+          # VM here and everything from this run is finished with. With no RG
+          # pinned the janitor sweeps the tagged groups LISA failed to delete.
           PYTHONPATH=scripts python scripts/vm_janitor.py \
-            --resource-group "$RG" --older-than-hours 0 --alert
+            ${PHASE3_RESOURCE_GROUP:+--resource-group "$PHASE3_RESOURCE_GROUP"} \
+            --older-than-hours 0 --alert
 
       # ----------------------------------------------------------------
       # 6. Refresh the committed status page with the fresh verdicts.

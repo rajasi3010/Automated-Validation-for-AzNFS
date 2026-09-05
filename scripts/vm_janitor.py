@@ -1,33 +1,46 @@
 #!/usr/bin/env python3
-"""Delete the VMs Phase 3 leaves behind in the pinned resource group.
+"""Delete what Phase 3 leaves behind in Azure, and alert if anything survives.
 
-LISA's only cleanup is deleting the whole resource group it created. When
-``resource_group_name`` is pinned in the runbook it deliberately skips that
-(``platform_.py``: "skipped to delete resource group ... as it's specified in
-runbook") and has no per-resource fallback, so every VM it provisions survives
-the run. Pinning the RG to avoid subscription-scope Contributor therefore
-disabled cleanup entirely, and the group accumulated 103 running VMs in a week.
+LISA's only cleanup is deleting the whole resource group it created. Two ways
+that fails, and this handles both:
 
-This deletes them instead: the VMs, then the NICs / public IPs / disks they
-leave orphaned, then LISA's transient storage accounts. The shared VNet and NSG
-are kept -- they cost nothing and LISA reuses them.
+* **No RG pinned** (the normal setup): LISA makes one group per environment and
+  deletes it at the end. If it dies first the group is orphaned, so this sweeps
+  the groups tagged ``created_by=aznfs-phase3`` that outlived their run.
+* **An RG pinned** in the runbook: LISA deliberately skips deletion
+  (``platform_.py``: "skipped to delete resource group ... as it's specified in
+  runbook") and has no per-resource fallback, so every VM survives. That is how
+  one group reached 103 running VMs in a week. This deletes the VMs, then the
+  NICs / public IPs / disks / private endpoints they orphan, then LISA's
+  transient storage accounts -- keeping the shared VNet, NSG and the shared
+  storage account, which LISA reuses.
 
-Run with ``--alert`` to e-mail when anything survives the sweep, so a future
-cleanup regression is noticed instead of quietly costing money.
+Run with ``--alert`` to e-mail when anything survives, so a future cleanup
+regression is noticed instead of quietly costing money.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-# LISA names its transient NFS storage accounts lisasc<random>; anything else in
-# the group was put there deliberately and is left alone.
-STORAGE_PREFIX = "lisa"
+# LISA's per-environment NFS storage accounts. Deliberately NOT just "lisa":
+# LISA's SHARED account is lisas<location><subscription-suffix> (e.g.
+# lisascentralindi92ef804a), which is reused across runs and must survive.
+STORAGE_PREFIX = "lisasc"
+# ...and "lisasc" alone still matches that shared account in some regions
+# (centralindia -> lisas + centralindi), so the shared name is excluded by name.
+SHARED_STORAGE_RE = re.compile(r"^lisas[a-z]{4,11}[0-9a-f]{8}$")
+
+# Applied by the runbook to every resource group LISA creates for us, so an
+# orphan can be identified without guessing from its name.
+OWNER_TAG = "created_by"
+OWNER_VALUE = "aznfs-phase3"
 
 
 def _az(*args: str) -> object:
@@ -121,12 +134,64 @@ def _delete_orphans(resource_group: str) -> tuple[dict[str, int], int]:
     failures += f
 
     accounts = _az("storage", "account", "list", "-g", resource_group,
-                   "--query", f"[?starts_with(name, '{STORAGE_PREFIX}')].id") or []
+                   "--query", f"[?starts_with(name, '{STORAGE_PREFIX}')]"
+                              ".{name:name, id:id}") or []
+    ids = [a["id"] for a in accounts if not SHARED_STORAGE_RE.match(a["name"])]
     removed["storage"], f = _delete_each(
-        "storage account", accounts, "storage", "account", "delete", "--yes")
+        "storage account", ids, "storage", "account", "delete", "--yes")
     failures += f
 
     return removed, failures
+
+
+def orphan_groups(older_than_hours: float) -> list[str]:
+    """Tagged resource groups LISA should have deleted and did not.
+
+    Only reachable when no RG is pinned -- which is the normal configuration,
+    where LISA makes one group per environment and deletes it itself. A group
+    still standing afterwards means that cleanup did not happen.
+
+    Age is taken from the newest VM inside, because resource groups carry no
+    creation timestamp. A group with no VMs left is treated as sweepable.
+    """
+    groups = _az("group", "list", "--tag", f"{OWNER_TAG}={OWNER_VALUE}",
+                 "--query", "[].name") or []
+    if older_than_hours <= 0:
+        return sorted(groups)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    stale: list[str] = []
+    for name in groups:
+        created = [_parse_created(c) for c in
+                   (_az("vm", "list", "-g", name, "--query", "[].timeCreated") or [])]
+        newest = max([c for c in created if c], default=None)
+        if newest is None or newest < cutoff:
+            stale.append(name)
+        else:
+            logger.info("Keeping %s: holds a VM created %s", name, newest)
+    return sorted(stale)
+
+
+def sweep_orphan_groups(older_than_hours: float, dry_run: bool = False) -> dict:
+    """Delete whole orphaned groups -- the cleanup LISA skipped."""
+    victims = orphan_groups(older_than_hours)
+    logger.info("%d orphaned resource group(s) tagged %s=%s",
+                len(victims), OWNER_TAG, OWNER_VALUE)
+    if dry_run:
+        for name in victims:
+            logger.info("  would delete resource group %s", name)
+        return {"deleted_groups": 0, "eligible": len(victims), "failures": 0}
+
+    failures = 0
+    for name in victims:
+        try:
+            _az("group", "delete", "--name", name, "--yes", "--no-wait")
+            logger.info("Deleting resource group %s", name)
+        except Exception as exc:  # noqa: BLE001 - report and keep going
+            failures += 1
+            logger.warning("Could not delete resource group %s: %s", name, exc)
+    return {"deleted_groups": len(victims) - failures,
+            "eligible": len(victims), "failures": failures}
 
 
 def sweep(resource_group: str, older_than_hours: float,
@@ -154,9 +219,11 @@ def sweep(resource_group: str, older_than_hours: float,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--resource-group", required=True)
+    parser.add_argument("--resource-group", default="",
+                        help="a pinned RG to sweep; omit to sweep the tagged "
+                             "per-environment groups LISA failed to delete")
     parser.add_argument("--older-than-hours", type=float, default=0.0,
-                        help="0 (default) sweeps every VM; use a few hours for a "
+                        help="0 (default) sweeps everything; use a few hours for a "
                              "scheduled sweep that must not touch a live run")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--alert", action="store_true",
@@ -165,19 +232,33 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    scope = args.resource_group or f"groups tagged {OWNER_TAG}={OWNER_VALUE}"
     try:
-        result = sweep(args.resource_group, args.older_than_hours, args.dry_run)
+        if args.resource_group:
+            result = sweep(args.resource_group, args.older_than_hours, args.dry_run)
+        else:
+            result = sweep_orphan_groups(args.older_than_hours, args.dry_run)
     except Exception as exc:  # noqa: BLE001 - cleanup must report, never abort the run
         logger.exception("VM sweep failed")
         if args.alert:
-            _alert(args.resource_group, f"the sweep itself failed: {exc}")
+            _alert(scope, f"the sweep itself failed: {exc}")
         return 1
+
+    if not args.resource_group:
+        logger.info("Deleted %d orphaned group(s); %d failure(s)",
+                    result["deleted_groups"], result["failures"])
+        # An orphan at all means LISA's own cleanup did not run.
+        if args.alert and (result["eligible"] or result["failures"]):
+            _alert(scope,
+                   f"{result['eligible']} group(s) outlived the run that made "
+                   f"them and {result['failures']} could not be deleted")
+        return 0
 
     logger.info("Deleted %d VM(s); orphans removed: %s; %d failure(s); %d VM(s) remain",
                 result["deleted_vms"], result["orphans"],
                 result.get("failures", 0), result["remaining"])
     if args.alert and (result["remaining"] or result.get("failures")):
-        _alert(args.resource_group,
+        _alert(scope,
                f"{result['remaining']} VM(s) still present and "
                f"{result.get('failures', 0)} resource(s) could not be deleted")
     return 0
