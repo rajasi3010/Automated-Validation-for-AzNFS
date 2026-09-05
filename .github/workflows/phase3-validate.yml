@@ -234,7 +234,10 @@ jobs:
           if [ -n "${PHASE3_RESOURCE_GROUP:-}" ]; then
             ARGS=(--resource-group "$PHASE3_RESOURCE_GROUP" "${ARGS[@]}")
           fi
-          PYTHONPATH=scripts python scripts/vm_janitor.py "${ARGS[@]}"
+          # The venv, not bare `python`: this runner has no `python` on PATH, and
+          # the alert needs azure-communication-email, which only the venv has.
+          PYTHONPATH=scripts "${LISA_VENV:-$HOME/lisa-venv}/bin/python" \
+            scripts/vm_janitor.py "${ARGS[@]}"
 
       # ----------------------------------------------------------------
       # 6. Refresh the committed status page with the fresh verdicts.

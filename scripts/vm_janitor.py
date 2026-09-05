@@ -67,8 +67,11 @@ def _az(*args: str) -> object:
 
 
 def _parse_created(value: str) -> datetime | None:
+    # Azure reports 100ns precision (7 fractional digits); fromisoformat only
+    # accepts up to 6 before Python 3.11, and this package supports 3.10.
+    text = re.sub(r"(\.\d{6})\d+", r"\1", (value or "").replace("Z", "+00:00"))
     try:
-        parsed = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
     # fromisoformat accepts a string with no offset and returns a naive datetime,
@@ -99,8 +102,9 @@ def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
     for vm in vms:
         created = _parse_created(vm.get("created", ""))
         if created is None:
-            # Deleting a VM we cannot date could kill a running test; keeping it
-            # only costs money, and the survivor count then raises an alert.
+            # Deleting a VM we cannot date could kill a running test, so keep it
+            # -- but it is counted as undatable so the alert still fires and it
+            # cannot sit there for ever unnoticed.
             logger.warning("Keeping %s: creation time %r unreadable and a cutoff is in force",
                            vm.get("name"), vm.get("created"))
         elif created < cutoff:
@@ -260,7 +264,7 @@ def sweep(resource_group: str, older_than_hours: float,
         return {"deleted_vms": 0, "eligible": len(victims), "failures": 0,
                 "orphans": {"private_endpoints": 0, "nics": 0, "public_ips": 0,
                             "disks": 0, "storage": 0},
-                "remaining": len(victims)}
+                "remaining": len(victims), "undatable": 0}
 
     # One at a time: a bulk `az vm delete --ids` aborts the whole sweep if any
     # single VM fails, which is how orphans piled up before.
@@ -273,11 +277,17 @@ def sweep(resource_group: str, older_than_hours: float,
         resource_group, detached_only=older_than_hours > 0)
 
     # Count what is still ELIGIBLE, not every VM: the ones the cutoff keeps are
-    # meant to be there and must not raise an alert.
+    # meant to be there and must not raise an alert. VMs kept only because their
+    # age is unreadable are separate -- they DO need reporting, or they sit
+    # there for ever.
     remaining = len(stale_vms(resource_group, older_than_hours))
+    undatable = sum(
+        1 for vm in (_az("vm", "list", "-g", resource_group,
+                         "--query", "[].{name:name, created:timeCreated}") or [])
+        if _parse_created(vm.get("created", "")) is None)
     return {"deleted_vms": deleted, "eligible": len(victims),
             "orphans": orphans, "failures": failures + orphan_failures,
-            "remaining": remaining}
+            "remaining": remaining, "undatable": undatable}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -320,13 +330,17 @@ def main(argv: list[str] | None = None) -> int:
                    f"them and {result['failures']} could not be deleted")
         return 0
 
-    logger.info("Deleted %d VM(s); orphans removed: %s; %d failure(s); %d VM(s) remain",
+    logger.info("Deleted %d VM(s); orphans removed: %s; %d failure(s); "
+                "%d VM(s) remain; %d of unreadable age",
                 result["deleted_vms"], result["orphans"],
-                result.get("failures", 0), result["remaining"])
-    if args.alert and (result["remaining"] or result.get("failures")):
+                result.get("failures", 0), result["remaining"],
+                result.get("undatable", 0))
+    if args.alert and (result["remaining"] or result.get("failures")
+                       or result.get("undatable")):
         _alert(scope,
-               f"{result['remaining']} VM(s) still present and "
-               f"{result.get('failures', 0)} resource(s) could not be deleted")
+               f"{result['remaining']} VM(s) still present, "
+               f"{result.get('undatable', 0)} could not be dated so were left alone, "
+               f"and {result.get('failures', 0)} resource(s) could not be deleted")
     return 0
 
 

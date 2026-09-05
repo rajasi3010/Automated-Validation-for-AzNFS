@@ -446,3 +446,26 @@ def test_a_stalled_group_deletion_is_reported_again_next_run(monkeypatch):
 
     assert len(alerts) == 2
     assert all("outlived" in a for a in alerts)
+
+
+def test_azure_100ns_timestamps_parse():
+    # Real values from `az vm list`: 7 fractional digits. fromisoformat only
+    # accepts 6 before Python 3.11, and this package supports 3.10.
+    parsed = vm_janitor._parse_created("2025-06-24T06:34:18.5885152+00:00")
+    assert parsed is not None
+    assert parsed.year == 2025 and parsed.microsecond == 588515
+
+
+def test_a_kept_undatable_vm_still_alerts(monkeypatch):
+    # Keeping it is the safe choice, but it must not sit there unnoticed --
+    # a silent leak is exactly what this script exists to prevent.
+    alerts = []
+    monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: [_vm("odd", "not-a-date")]
+                        if a[:2] == ("vm", "list") else None)
+
+    assert vm_janitor.main(["--resource-group", "rg",
+                            "--older-than-hours", "24", "--alert"]) == 0
+    assert len(alerts) == 1
+    assert "could not be dated" in alerts[0]
