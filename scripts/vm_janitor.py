@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -299,12 +300,26 @@ def sweep(resource_group: str, older_than_hours: float,
             "remaining": remaining, "undatable": undatable}
 
 
+def _cutoff_hours(value: str) -> float:
+    """Reject a cutoff that cannot mean what the caller intended.
+
+    A negative value silently selects the aggressive path -- so a typo like
+    ``--older-than-hours -24`` would delete everything instead of protecting the
+    last 24 hours. Infinity raises deep inside timedelta instead of here.
+    """
+    hours = float(value)
+    if not math.isfinite(hours) or hours < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite, non-negative number of hours, not {value!r}")
+    return hours
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource-group", default="",
                         help="a pinned RG to sweep; omit to sweep the tagged "
                              "per-environment groups LISA failed to delete")
-    parser.add_argument("--older-than-hours", type=float, default=0.0,
+    parser.add_argument("--older-than-hours", type=_cutoff_hours, default=0.0,
                         help="0 (default) sweeps everything; use a few hours for a "
                              "scheduled sweep that must not touch a live run")
     parser.add_argument("--dry-run", action="store_true")
@@ -348,8 +363,11 @@ def main(argv: list[str] | None = None) -> int:
                        or result.get("undatable")):
         # "still present" would contradict itself: remaining counts only the
         # ELIGIBLE survivors, so it can be 0 while undatable VMs are running.
+        # A dry run deleted nothing, so it must not claim a sweep happened.
+        outcome = "would survive a sweep" if args.dry_run else "survived the sweep"
         _alert(scope,
-               f"{result['remaining']} eligible VM(s) survived the sweep, "
+               f"{'[dry run] ' if args.dry_run else ''}"
+               f"{result['remaining']} eligible VM(s) {outcome}, "
                f"{result.get('undatable', 0)} were left running because their age "
                f"could not be read, and {result.get('failures', 0)} resource(s) "
                f"could not be deleted")

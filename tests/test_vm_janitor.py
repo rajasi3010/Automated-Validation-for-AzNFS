@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 os.environ.setdefault("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
 
 
+import pytest
+
 import vm_janitor
 
 
@@ -483,3 +485,25 @@ def test_dry_run_predicts_the_alert_a_real_run_would_raise(monkeypatch):
     real = vm_janitor.sweep("rg", 24)
 
     assert dry["undatable"] == real["undatable"] == 1
+
+
+def test_a_negative_cutoff_is_rejected():
+    # '--older-than-hours -24' silently took the aggressive path and deleted
+    # everything, the opposite of what the typo intended.
+    for bad in ("-24", "nan", "inf", "-0.5"):
+        with pytest.raises(SystemExit):
+            vm_janitor.main(["--resource-group", "rg", "--older-than-hours", bad])
+
+
+def test_a_dry_run_alert_does_not_claim_a_sweep_happened(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: [_vm("vm1", "2026-08-01T00:00:00+00:00")]
+                        if a[:2] == ("vm", "list") else None)
+
+    vm_janitor.main(["--resource-group", "rg", "--dry-run", "--alert"])
+
+    assert "survived the sweep" not in alerts[0]
+    assert alerts[0].startswith("[dry run]")
+    assert "would survive a sweep" in alerts[0]
