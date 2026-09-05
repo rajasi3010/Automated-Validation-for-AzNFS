@@ -145,7 +145,10 @@ def test_shared_storage_account_is_never_deleted(monkeypatch):
         if args[:2] == ("vm", "list"):
             return []
         if args[:3] == ("storage", "account", "list"):
+            # chinanorth3 is the awkward one: a location with a digit that
+            # also starts with c, so it matches the lisasc prefix.
             return [{"name": "lisascentralindi92ef804a", "id": "/id/shared"},
+                    {"name": "lisaschinanorth392ef804a", "id": "/id/shared-digit"},
                     {"name": "lisascaqty6dog2w", "id": "/id/transient"}]
         if "list" in args[:3]:
             return []

@@ -29,13 +29,16 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-# LISA's per-environment NFS storage accounts. Deliberately NOT just "lisa":
-# LISA's SHARED account is lisas<location><subscription-suffix> (e.g.
-# lisascentralindi92ef804a), which is reused across runs and must survive.
+# LISA's per-environment NFS storage accounts (features.py: STORAGE_ACCOUNT_PREFIX
+# = "lisasc" + 10 random chars). Deliberately NOT just "lisa": LISA's SHARED
+# account is lisas<location><subscription-suffix> (e.g. lisascentralindi92ef804a),
+# which is reused across runs and must survive.
 STORAGE_PREFIX = "lisasc"
-# ...and "lisasc" alone still matches that shared account in some regions
-# (centralindia -> lisas + centralindi), so the shared name is excluded by name.
-SHARED_STORAGE_RE = re.compile(r"^lisas[a-z]{4,11}[0-9a-f]{8}$")
+# "lisasc" still matches that shared account wherever the location starts with a
+# c (centralindia, centralus, canadacentral...), so exclude the shared shape too.
+# Locations can contain digits (chinanorth3), and the random suffix is always 10
+# chars -- which cannot match this, since it would need a 3-char location.
+SHARED_STORAGE_RE = re.compile(r"^lisas[a-z0-9]{4,11}[0-9a-f]{8}$")
 
 # Applied by the runbook to every resource group LISA creates for us, so an
 # orphan can be identified without guessing from its name.
