@@ -34,11 +34,20 @@ def test_an_age_cutoff_protects_a_running_environment(monkeypatch):
     assert [v["name"] for v in vm_janitor.stale_vms("rg", 3)] == ["old"]
 
 
-def test_an_unparseable_creation_time_is_swept(monkeypatch):
-    # Better to remove a VM of unknown age than to leak it for ever.
+def test_an_unparseable_creation_time_is_swept_with_no_cutoff(monkeypatch):
+    # Nothing to protect when the group is known idle, so do not leak it.
     monkeypatch.setattr(vm_janitor, "_az", lambda *a: [_vm("odd", "not-a-date")])
 
-    assert [v["name"] for v in vm_janitor.stale_vms("rg", 3)] == ["odd"]
+    assert [v["name"] for v in vm_janitor.stale_vms("rg", 0)] == ["odd"]
+
+
+def test_an_undatable_vm_is_kept_when_a_cutoff_is_in_force(monkeypatch):
+    # The cutoff exists to protect a running environment. Deleting a VM we
+    # cannot date could kill a live test; keeping it only costs money, and the
+    # survivor count raises an alert so it cannot be missed.
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [_vm("odd", "not-a-date")])
+
+    assert vm_janitor.stale_vms("rg", 3) == []
 
 
 def test_dry_run_deletes_nothing(monkeypatch):
@@ -383,3 +392,42 @@ def test_vms_come_back_oldest_first_regardless_of_offset(monkeypatch):
     order = [v["name"] for v in vm_janitor.stale_vms("rg", 0)]
     assert order[0] == "unreadable"          # unparseable counts as very old
     assert order.index("newer") < order.index("oldest")
+
+
+def test_a_group_of_undatable_vms_is_kept(monkeypatch):
+    # Same reasoning one level up: assume one of them is live rather than
+    # delete the whole group out from under a running environment.
+    def fake_az(*args):
+        if args[:2] == ("group", "list"):
+            return ["lisa-odd-e0"]
+        if args[:2] == ("vm", "list"):
+            return ["not-a-date"]
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    assert vm_janitor.orphan_groups(24) == []
+
+
+def test_an_empty_group_is_still_swept(monkeypatch):
+    # No VMs at all is a genuine orphan, not an unknown age.
+    def fake_az(*args):
+        if args[:2] == ("group", "list"):
+            return ["lisa-empty-e0"]
+        if args[:2] == ("vm", "list"):
+            return []
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    assert vm_janitor.orphan_groups(24) == ["lisa-empty-e0"]
+
+
+def test_dry_run_reports_the_same_shape_as_a_real_sweep(monkeypatch):
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: [_vm("old", "2026-08-26T11:35:24+00:00")]
+                        if a[:2] == ("vm", "list") else None)
+
+    dry = vm_janitor.sweep("rg", 0, dry_run=True)
+    real = vm_janitor.sweep("rg", 0)
+
+    assert dry.keys() == real.keys()
+    assert dry["orphans"].keys() == real["orphans"].keys()

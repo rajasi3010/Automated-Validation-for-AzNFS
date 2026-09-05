@@ -98,7 +98,12 @@ def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
     eligible: list[dict] = []
     for vm in vms:
         created = _parse_created(vm.get("created", ""))
-        if created is None or created < cutoff:
+        if created is None:
+            # Deleting a VM we cannot date could kill a running test; keeping it
+            # only costs money, and the survivor count then raises an alert.
+            logger.warning("Keeping %s: creation time %r unreadable and a cutoff is in force",
+                           vm.get("name"), vm.get("created"))
+        elif created < cutoff:
             eligible.append(vm)
         else:
             logger.info("Keeping %s: created %s, newer than the cutoff",
@@ -192,13 +197,18 @@ def orphan_groups(older_than_hours: float) -> list[str]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
     stale: list[str] = []
     for name in groups:
-        created = [_parse_created(c) for c in
-                   (_az("vm", "list", "-g", name, "--query", "[].timeCreated") or [])]
-        newest = max([c for c in created if c], default=None)
-        if newest is None or newest < cutoff:
+        stamps = _az("vm", "list", "-g", name, "--query", "[].timeCreated") or []
+        parsed = [c for c in (_parse_created(s) for s in stamps) if c]
+        if not stamps:
+            stale.append(name)          # nothing left running: safe to remove
+        elif not parsed:
+            # Holds VMs we cannot date -- assume one is live rather than delete
+            # the group out from under it.
+            logger.warning("Keeping %s: holds VMs with unreadable creation times", name)
+        elif max(parsed) < cutoff:
             stale.append(name)
         else:
-            logger.info("Keeping %s: holds a VM created %s", name, newest)
+            logger.info("Keeping %s: holds a VM created %s", name, max(parsed))
     return sorted(stale)
 
 
@@ -240,8 +250,10 @@ def sweep(resource_group: str, older_than_hours: float,
     if dry_run:
         for vm in victims:
             logger.info("  would delete %s (created %s)", vm["name"], vm.get("created"))
-        return {"deleted_vms": 0, "eligible": len(victims), "orphans": {},
-                "failures": 0, "remaining": len(victims)}
+        return {"deleted_vms": 0, "eligible": len(victims), "failures": 0,
+                "orphans": {"private_endpoints": 0, "nics": 0, "public_ips": 0,
+                            "disks": 0, "storage": 0},
+                "remaining": len(victims)}
 
     # One at a time: a bulk `az vm delete --ids` aborts the whole sweep if any
     # single VM fails, which is how orphans piled up before.
