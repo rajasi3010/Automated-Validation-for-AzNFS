@@ -469,3 +469,15 @@ def test_a_kept_undatable_vm_still_alerts(monkeypatch):
                             "--older-than-hours", "24", "--alert"]) == 0
     assert len(alerts) == 1
     assert "could not be dated" in alerts[0]
+
+
+def test_dry_run_predicts_the_alert_a_real_run_would_raise(monkeypatch):
+    # Zeroing undatable made a dry run look clean while a real one would alert.
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: [_vm("odd", "not-a-date")]
+                        if a[:2] == ("vm", "list") else None)
+
+    dry = vm_janitor.sweep("rg", 24, dry_run=True)
+    real = vm_janitor.sweep("rg", 24)
+
+    assert dry["undatable"] == real["undatable"] == 1

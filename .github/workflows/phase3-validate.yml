@@ -222,6 +222,8 @@ jobs:
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
           PHASE3_RESOURCE_GROUP: ${{ vars.PHASE3_RESOURCE_GROUP }}
+          # Same venv the validation step uses -- the alert needs its packages.
+          LISA_VENV: ${{ vars.LISA_VENV }}
         run: |
           set -euo pipefail
           az login --identity --client-id "${AZURE_CLIENT_ID}" \

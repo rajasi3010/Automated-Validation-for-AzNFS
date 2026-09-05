@@ -245,6 +245,13 @@ def sweep_orphan_groups(older_than_hours: float, dry_run: bool = False) -> dict:
             "eligible": len(victims), "failures": failures}
 
 
+def _undatable_count(resource_group: str) -> int:
+    """VMs whose creation time cannot be read, so a cutoff has to keep them."""
+    vms = _az("vm", "list", "-g", resource_group,
+              "--query", "[].{name:name, created:timeCreated}") or []
+    return sum(1 for vm in vms if _parse_created(vm.get("created", "")) is None)
+
+
 def sweep(resource_group: str, older_than_hours: float,
           dry_run: bool = False) -> dict:
     """Delete stale VMs and their orphans. Returns what was removed and left.
@@ -261,10 +268,13 @@ def sweep(resource_group: str, older_than_hours: float,
     if dry_run:
         for vm in victims:
             logger.info("  would delete %s (created %s)", vm["name"], vm.get("created"))
+        # Reported, not zeroed: a dry run has to predict the alert a real one
+        # would raise, and undatable VMs are part of that.
         return {"deleted_vms": 0, "eligible": len(victims), "failures": 0,
                 "orphans": {"private_endpoints": 0, "nics": 0, "public_ips": 0,
                             "disks": 0, "storage": 0},
-                "remaining": len(victims), "undatable": 0}
+                "remaining": len(victims),
+                "undatable": _undatable_count(resource_group)}
 
     # One at a time: a bulk `az vm delete --ids` aborts the whole sweep if any
     # single VM fails, which is how orphans piled up before.
@@ -281,10 +291,7 @@ def sweep(resource_group: str, older_than_hours: float,
     # age is unreadable are separate -- they DO need reporting, or they sit
     # there for ever.
     remaining = len(stale_vms(resource_group, older_than_hours))
-    undatable = sum(
-        1 for vm in (_az("vm", "list", "-g", resource_group,
-                         "--query", "[].{name:name, created:timeCreated}") or [])
-        if _parse_created(vm.get("created", "")) is None)
+    undatable = _undatable_count(resource_group)
     return {"deleted_vms": deleted, "eligible": len(victims),
             "orphans": orphans, "failures": failures + orphan_failures,
             "remaining": remaining, "undatable": undatable}
