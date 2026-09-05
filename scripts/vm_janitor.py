@@ -101,25 +101,32 @@ def _delete_each(kind: str, ids: list[str], *cmd: str) -> tuple[int, int]:
     return ok, failed
 
 
-def _delete_orphans(resource_group: str) -> tuple[dict[str, int], int]:
+def _delete_orphans(resource_group: str,
+                    detached_only: bool = False) -> tuple[dict[str, int], int]:
     """Remove what the VMs leave behind, in dependency order.
 
-    Private endpoints go FIRST: their NIC cannot be deleted on its own (Azure
-    rejects it with NicInUseWithPrivateEndpoint) and disappears with the
-    endpoint. Everything else is only touched once already detached, so this
-    cannot take anything out from under a running VM.
+    ``detached_only`` is the safe subset for when a cutoff is protecting a live
+    environment: disks, NICs and public IPs are filtered to those provably not
+    in use, but a private endpoint and a storage account carry no such state and
+    a running test needs both -- so those are skipped entirely.
+
+    Private endpoints otherwise go FIRST: their NIC cannot be deleted on its own
+    (Azure rejects it with NicInUseWithPrivateEndpoint) and disappears with the
+    endpoint.
     """
     removed = {"private_endpoints": 0, "nics": 0, "public_ips": 0, "disks": 0, "storage": 0}
     failures = 0
 
-    endpoints = _az("network", "private-endpoint", "list", "-g", resource_group,
-                    "--query", "[].id") or []
-    removed["private_endpoints"], f = _delete_each(
-        "private endpoint", endpoints, "network", "private-endpoint", "delete")
-    failures += f
+    if not detached_only:
+        endpoints = _az("network", "private-endpoint", "list", "-g", resource_group,
+                        "--query", "[].id") or []
+        removed["private_endpoints"], f = _delete_each(
+            "private endpoint", endpoints, "network", "private-endpoint", "delete")
+        failures += f
 
+    # A private endpoint's NIC also has no VM, but cannot be deleted directly.
     nics = _az("network", "nic", "list", "-g", resource_group,
-               "--query", "[?virtualMachine==null].id") or []
+               "--query", "[?virtualMachine==null && privateEndpoint==null].id") or []
     removed["nics"], f = _delete_each("nic", nics, "network", "nic", "delete")
     failures += f
 
@@ -133,13 +140,14 @@ def _delete_orphans(resource_group: str) -> tuple[dict[str, int], int]:
     removed["disks"], f = _delete_each("disk", disks, "disk", "delete", "--yes")
     failures += f
 
-    accounts = _az("storage", "account", "list", "-g", resource_group,
-                   "--query", f"[?starts_with(name, '{STORAGE_PREFIX}')]"
-                              ".{name:name, id:id}") or []
-    ids = [a["id"] for a in accounts if not SHARED_STORAGE_RE.match(a["name"])]
-    removed["storage"], f = _delete_each(
-        "storage account", ids, "storage", "account", "delete", "--yes")
-    failures += f
+    if not detached_only:
+        accounts = _az("storage", "account", "list", "-g", resource_group,
+                       "--query", f"[?starts_with(name, '{STORAGE_PREFIX}')]"
+                                  ".{name:name, id:id}") or []
+        ids = [a["id"] for a in accounts if not SHARED_STORAGE_RE.match(a["name"])]
+        removed["storage"], f = _delete_each(
+            "storage account", ids, "storage", "account", "delete", "--yes")
+        failures += f
 
     return removed, failures
 
@@ -206,15 +214,22 @@ def sweep(resource_group: str, older_than_hours: float,
         return {"deleted_vms": 0, "eligible": len(victims), "orphans": {},
                 "failures": 0, "remaining": len(victims)}
 
-    if victims:
-        # One call so the deletions run in parallel and we wait for all of them;
-        # the disks and NICs cannot be removed until their VM is gone.
-        _az("vm", "delete", "--yes", "--ids", *[vm["id"] for vm in victims])
+    # One at a time: a bulk `az vm delete --ids` aborts the whole sweep if any
+    # single VM fails, which is how orphans piled up before.
+    deleted, failures = _delete_each(
+        "vm", [vm["id"] for vm in victims], "vm", "delete", "--yes")
 
-    orphans, failures = _delete_orphans(resource_group)
-    remaining = len(_az("vm", "list", "-g", resource_group, "--query", "[].name") or [])
-    return {"deleted_vms": len(victims), "eligible": len(victims),
-            "orphans": orphans, "failures": failures, "remaining": remaining}
+    # With a cutoff in force some VMs are deliberately still running, so only
+    # touch resources that are provably detached from them.
+    orphans, orphan_failures = _delete_orphans(
+        resource_group, detached_only=older_than_hours > 0)
+
+    # Count what is still ELIGIBLE, not every VM: the ones the cutoff keeps are
+    # meant to be there and must not raise an alert.
+    remaining = len(stale_vms(resource_group, older_than_hours))
+    return {"deleted_vms": deleted, "eligible": len(victims),
+            "orphans": orphans, "failures": failures + orphan_failures,
+            "remaining": remaining}
 
 
 def main(argv: list[str] | None = None) -> int:

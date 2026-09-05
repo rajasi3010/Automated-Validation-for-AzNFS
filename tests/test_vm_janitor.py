@@ -209,3 +209,84 @@ def test_an_orphan_group_alerts_even_when_deletion_succeeds(monkeypatch):
     assert vm_janitor.main(["--older-than-hours", "0", "--alert"]) == 0
     assert len(alerts) == 1
     assert "outlived" in alerts[0]
+
+
+def test_a_cutoff_leaves_live_resources_alone(monkeypatch):
+    # With a cutoff protecting a running environment, a private endpoint and a
+    # storage account carry no "detached" state and the live test needs both --
+    # deleting them would break the very run the cutoff exists to protect.
+    fresh = datetime.now(timezone.utc).isoformat()
+    calls = []
+
+    def fake_az(*args):
+        calls.append(args[:3])
+        if args[:2] == ("vm", "list"):
+            return [_vm("live", fresh)]
+        if "list" in args[:3]:
+            return ["/id/one"]
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    result = vm_janitor.sweep("rg", 24)
+
+    assert ("network", "private-endpoint", "list") not in calls
+    assert ("storage", "account", "list") not in calls
+    assert result["orphans"]["private_endpoints"] == 0
+    assert result["orphans"]["storage"] == 0
+    assert result["deleted_vms"] == 0            # the live VM was kept
+
+
+def test_kept_vms_do_not_raise_a_false_alert(monkeypatch):
+    # remaining used to count every VM in the group, so the ones the cutoff
+    # deliberately keeps looked like a cleanup failure.
+    fresh = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: [_vm("live", fresh)] if a[:2] == ("vm", "list") else None)
+    alerts = []
+    monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
+
+    assert vm_janitor.main(["--resource-group", "rg",
+                            "--older-than-hours", "24", "--alert"]) == 0
+    assert alerts == []
+
+
+def test_one_undeletable_vm_does_not_stop_the_rest(monkeypatch):
+    # A bulk `az vm delete --ids` aborted everything if any single VM failed.
+    deleted = []
+
+    def fake_az(*args):
+        if args[:2] == ("vm", "list"):
+            return [_vm("bad", "2026-08-26T11:35:24+00:00"),
+                    _vm("good", "2026-08-26T11:35:24+00:00")] if not deleted else []
+        if args[:3] == ("vm", "delete", "--yes"):
+            if args[-1].endswith("bad"):
+                raise RuntimeError("VMBeingDeallocated")
+            deleted.append(args[-1])
+            return None
+        if "list" in args[:3]:
+            return []
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    result = vm_janitor.sweep("rg", 0)
+
+    assert result["deleted_vms"] == 1
+    assert result["failures"] == 1
+    assert any(d.endswith("good") for d in deleted)
+
+
+def test_private_endpoint_nics_are_not_selected_directly(monkeypatch):
+    # Azure refuses to delete them; the endpoint owns them and takes them with it.
+    queries = []
+
+    def fake_az(*args):
+        if args[:3] == ("network", "nic", "list"):
+            queries.append(args[-1])
+        if args[:2] == ("vm", "list"):
+            return []
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+    vm_janitor.sweep("rg", 0)
+
+    assert queries and "privateEndpoint==null" in queries[0]
