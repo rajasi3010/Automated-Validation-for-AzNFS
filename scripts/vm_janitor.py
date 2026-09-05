@@ -105,7 +105,7 @@ def stale_vms(resource_group: str, older_than_hours: float) -> list[dict]:
         if created is None:
             # Deleting a VM we cannot date could kill a running test, so keep it
             # -- but it is counted as undatable so the alert still fires and it
-            # cannot sit there for ever unnoticed.
+            # cannot sit there forever unnoticed.
             logger.warning("Keeping %s: creation time %r unreadable and a cutoff is in force",
                            vm.get("name"), vm.get("created"))
         elif created < cutoff:
@@ -292,7 +292,7 @@ def sweep(resource_group: str, older_than_hours: float,
     # Count what is still ELIGIBLE, not every VM: the ones the cutoff keeps are
     # meant to be there and must not raise an alert. VMs kept only because their
     # age is unreadable are separate -- they DO need reporting, or they sit
-    # there for ever.
+    # there forever.
     remaining = len(stale_vms(resource_group, older_than_hours))
     undatable = _undatable_count(resource_group)
     return {"deleted_vms": deleted, "eligible": len(victims),
@@ -350,8 +350,9 @@ def main(argv: list[str] | None = None) -> int:
         # same group still there.
         if args.alert and (result["eligible"] or result["failures"]):
             _alert(scope,
+                   f"{'[dry run] ' if args.dry_run else ''}"
                    f"{result['eligible']} group(s) outlived the run that made "
-                   f"them and {result['failures']} could not be deleted")
+                   f"them and {result['failures']} deletion(s) could not be requested")
         return 0
 
     logger.info("Deleted %d VM(s); orphans removed: %s; %d failure(s); "

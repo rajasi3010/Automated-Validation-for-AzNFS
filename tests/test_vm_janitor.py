@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-import os
 import sys
 import types
 from datetime import datetime, timezone
 
-os.environ.setdefault("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
-
-
 import pytest
 
 import vm_janitor
+
+
+@pytest.fixture(autouse=True)
+def _subscription(monkeypatch):
+    # Per-test and restored afterwards: vm_janitor reads this at call time, and
+    # setting it at import would leak into every other module in the run.
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
 
 
 def _vm(name, created):
@@ -507,3 +510,23 @@ def test_a_dry_run_alert_does_not_claim_a_sweep_happened(monkeypatch):
     assert "survived the sweep" not in alerts[0]
     assert alerts[0].startswith("[dry run]")
     assert "would survive a sweep" in alerts[0]
+
+
+def test_a_dry_run_group_alert_does_not_claim_deletions_were_attempted(monkeypatch):
+    # The VM path was fixed for this; the group path had the same flaw.
+    alerts = []
+    monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: ["lisa-orphan-e0"] if a[:2] == ("group", "list") else None)
+
+    vm_janitor.main(["--dry-run", "--alert"])
+
+    assert alerts[0].startswith("[dry run]")
+    assert "could not be deleted" not in alerts[0]
+
+
+def test_the_subscription_env_var_does_not_leak_between_tests(monkeypatch):
+    # It used to be set at import time, mutating the whole test process.
+    import os
+    monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
+    assert "AZURE_SUBSCRIPTION_ID" not in os.environ

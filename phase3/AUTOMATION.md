@@ -55,8 +55,9 @@ Three moving parts, all already in this folder:
 1. **Read** Phase 2's `lisa_jobs.json` (one entry per distro: image URN,
    published package URL + version, arch).
 2. **Validate** each distro: the driver runs `lisa run` on the base runbook with
-   `-v` overrides. All 3 cases run **in parallel** (`concurrency:3`), each
-   environment in its **own resource group** that LISA creates and deletes.
+   `-v` overrides. The cases run **in parallel** (`--concurrency`: 3 by default, 1 in CI
+   unless `PHASE3_CONCURRENCY` is set),
+   each environment in its **own resource group** that LISA creates and deletes.
    The `junit` notifier writes `lisa.junit.xml`.
 3. **Score**: the driver parses that XML — a distro **passes** when it has at
    least one executed case and **zero** failures; on a failure it extracts the
