@@ -213,24 +213,31 @@ def orphan_groups(older_than_hours: float) -> list[str]:
 
 
 def sweep_orphan_groups(older_than_hours: float, dry_run: bool = False) -> dict:
-    """Delete whole orphaned groups -- the cleanup LISA skipped."""
+    """Delete whole orphaned groups -- the cleanup LISA skipped.
+
+    Deletion is asynchronous (``--no-wait``, so several groups unwind at once
+    rather than blocking the job for minutes each), which means a request being
+    accepted is not proof it finished. Nothing here claims otherwise: the count
+    is of requests, and because the sweep is idempotent and alerts on *any*
+    orphan, one that stalls or fails is reported again by the next run.
+    """
     victims = orphan_groups(older_than_hours)
     logger.info("%d orphaned resource group(s) tagged %s=%s",
                 len(victims), OWNER_TAG, OWNER_VALUE)
     if dry_run:
         for name in victims:
             logger.info("  would delete resource group %s", name)
-        return {"deleted_groups": 0, "eligible": len(victims), "failures": 0}
+        return {"deletions_requested": 0, "eligible": len(victims), "failures": 0}
 
     failures = 0
     for name in victims:
         try:
             _az("group", "delete", "--name", name, "--yes", "--no-wait")
-            logger.info("Deleting resource group %s", name)
+            logger.info("Requested deletion of resource group %s", name)
         except Exception as exc:  # noqa: BLE001 - report and keep going
             failures += 1
             logger.warning("Could not delete resource group %s: %s", name, exc)
-    return {"deleted_groups": len(victims) - failures,
+    return {"deletions_requested": len(victims) - failures,
             "eligible": len(victims), "failures": failures}
 
 
@@ -302,9 +309,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.resource_group:
-        logger.info("Deleted %d orphaned group(s); %d failure(s)",
-                    result["deleted_groups"], result["failures"])
-        # An orphan at all means LISA's own cleanup did not run.
+        logger.info("Requested deletion of %d orphaned group(s); %d failure(s)",
+                    result["deletions_requested"], result["failures"])
+        # An orphan at all means LISA's own cleanup did not run. Deletion is
+        # async, so a request that stalls is caught by the next run finding the
+        # same group still there.
         if args.alert and (result["eligible"] or result["failures"]):
             _alert(scope,
                    f"{result['eligible']} group(s) outlived the run that made "

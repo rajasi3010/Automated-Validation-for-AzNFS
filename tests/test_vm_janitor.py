@@ -190,7 +190,7 @@ def test_orphan_groups_are_swept_when_no_rg_is_pinned(monkeypatch):
     result = vm_janitor.sweep_orphan_groups(0)
 
     assert deleted == ["lisa-20260905-1-e0", "lisa-20260905-1-e1"]
-    assert result["deleted_groups"] == 2
+    assert result["deletions_requested"] == 2
 
 
 def test_a_group_holding_a_fresh_vm_is_left_alone(monkeypatch):
@@ -431,3 +431,18 @@ def test_dry_run_reports_the_same_shape_as_a_real_sweep(monkeypatch):
 
     assert dry.keys() == real.keys()
     assert dry["orphans"].keys() == real["orphans"].keys()
+
+
+def test_a_stalled_group_deletion_is_reported_again_next_run(monkeypatch):
+    # --no-wait means an accepted request is not proof of completion, so the
+    # sweep must stay idempotent: the same orphan is found and alerted again.
+    alerts = []
+    monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
+    monkeypatch.setattr(vm_janitor, "_az",
+                        lambda *a: ["lisa-stuck-e0"] if a[:2] == ("group", "list") else None)
+
+    for _ in range(2):                       # the delete never actually lands
+        assert vm_janitor.main(["--older-than-hours", "0", "--alert"]) == 0
+
+    assert len(alerts) == 2
+    assert all("outlived" in a for a in alerts)
