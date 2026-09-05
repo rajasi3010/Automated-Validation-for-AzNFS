@@ -124,13 +124,17 @@ jobs:
             # is the first thing to suspect -- otherwise an upstream regression
             # is indistinguishable from an AzNFS one.
             echo "::notice::LISA engine changing to ${WANT:-upstream $REF} (was: ${HAVE_SHA:-not installed})"
-            LISA_VENV="$VENV" LISA_REF="$REF" bash phase3/setup_lisa.sh
+            # Hand over the commit we resolved, not the branch: re-resolving in
+            # setup_lisa.sh could land on a different one if main moves between
+            # the two lookups.
+            LISA_VENV="$VENV" LISA_REF="${WANT:-$REF}" bash phase3/setup_lisa.sh
             HAVE=$("$VENV/bin/pip" freeze 2>/dev/null | grep -i mslisa || true)
             HAVE_SHA=$(printf '%s' "$HAVE" | sed -n 's/.*@\([0-9a-fA-F]\{7,40\}\).*/\1/p' |
               tr '[:upper:]' '[:lower:]')
           fi
-          # Record what is installed, not what we hoped for.
-          echo "LISA_ENGINE_SHA=${WANT:-${HAVE_SHA:-unknown}}" >> "$GITHUB_ENV"
+          # What pip actually installed wins: attribution is worthless if it
+          # names a commit the run did not use.
+          echo "LISA_ENGINE_SHA=${HAVE_SHA:-${WANT:-unknown}}" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
       # 5. Run the Phase 3 driver: per-distro LISA validation, then record

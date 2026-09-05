@@ -105,7 +105,13 @@ fi
 # 5. Smoke check.
 # ---------------------------------------------------------------------------
 log "verify"
-lisa --help >/dev/null 2>&1 && echo "OK: lisa CLI resolves in $LISA_VENV"
+if ! lisa --help >/dev/null 2>&1; then
+  # `cmd && echo` would NOT fail the script under set -e, letting an unusable
+  # CLI through to fail later with far less context.
+  echo "ERROR: the lisa CLI is not usable in $LISA_VENV" >&2
+  exit 1
+fi
+echo "OK: lisa CLI resolves in $LISA_VENV"
 echo "LISA engine: $(pip freeze | grep -i mslisa || echo mslisa)"
 echo "Activate with: source $LISA_VENV/bin/activate"
 echo "Set the workflow repo variable LISA_VENV=$LISA_VENV"
