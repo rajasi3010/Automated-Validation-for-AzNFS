@@ -51,8 +51,6 @@ def load_buckets(
 ) -> dict[str, list[dict]]:
     """Return {state: [distro rollup, ...]} for the requested states."""
     records = db_manager.get_all_records(db_path)
-    if not include_excluded:
-        records = status_rollup.exclude_distros(records, status_rollup.prefixes_from_env())
     buckets = status_rollup.buckets_by_state(records, in_scope_only=not include_excluded)
     needle = distro.casefold()
     return {

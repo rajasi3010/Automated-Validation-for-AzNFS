@@ -143,10 +143,11 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
             for key, _ in cols
         )
         body += f"<tr>{cells}</tr>"
-        if with_skus and d.get("skus"):
+        detail = status_rollup.reason_bearing_skus(d.get("skus"))
+        if with_skus and detail:
             body += (
                 f"<tr><td colspan='{len(cols)}' style='padding:2px 8px 8px 24px;"
-                f"font-size:12px;color:#555'>{_sku_list_html(status_rollup.reason_bearing_skus(d['skus']))}</td></tr>"
+                f"font-size:12px;color:#555'>{_sku_list_html(detail)}</td></tr>"
             )
     return (
         "<table style='border-collapse:collapse;font-family:Segoe UI,sans-serif;"

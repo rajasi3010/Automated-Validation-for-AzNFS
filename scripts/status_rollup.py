@@ -114,6 +114,10 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
         return "unknown"  # unknown + new
 
     if in_scope_only:
+        # Both filters live here rather than in each caller: three surfaces read
+        # this rollup, and one of them forgetting a filter is exactly how the
+        # page and the e-mail came to disagree.
+        records = exclude_distros(records, prefixes_from_env())
         records = [r for r in records
                    if aznfs_support.is_supported_distro(r.get("distro_label", ""))]
 

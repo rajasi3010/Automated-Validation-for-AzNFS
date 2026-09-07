@@ -205,3 +205,17 @@ def test_text_output_breaks_down_pending_publish_too():
 
     assert "ubuntu-26_04-lts/server" in text
     assert "publish aznfs to prod" in text
+
+
+def test_digest_does_not_emit_an_empty_detail_list(monkeypatch):
+    # The guard checked the raw SKU list while the body rendered the filtered
+    # one, so a group with nothing to explain produced an empty bullet list.
+    records = [_img("Ubuntu 26.04", "known_unsupported", "ubuntu-26_04-lts", "server")]
+    sent = {}
+    monkeypatch.setattr(notifier, "_send",
+                        lambda subject, plain, html_body, recipients: sent.update(
+                            {"html": html_body}))
+
+    notifier.send_monthly_reminder(buckets_by_state(records), recipients=["a@b.c"])
+
+    assert "<ul" not in sent["html"] or "<li>" in sent["html"]

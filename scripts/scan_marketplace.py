@@ -620,8 +620,8 @@ def main() -> int:
     # Sent at most once per calendar month (UTC), on the FIRST scan of the month,
     # regardless of whether that run also found new releases. So on the month's
     # first run both can go out: the new-release email (if any) AND this snapshot
-    # of every tracked distro grouped by AzNFS validation state (three groups:
-    # known_supported / known_unsupported / unknown). The other ~29 daily runs
+    # of every tracked distro grouped by AzNFS validation state (known_supported /
+    # known_unsupported / pending_publish / unknown). The other ~29 daily runs
     # stay silent. Using the first run of the month (not strictly the 1st) means
     # a missed run on the 1st still sends on the next run.
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
