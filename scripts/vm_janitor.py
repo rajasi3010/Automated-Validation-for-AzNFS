@@ -204,10 +204,15 @@ def orphan_groups(older_than_hours: float) -> list[str]:
                  "--query", "[].{name:name,state:properties.provisioningState}") or []
     groups = []
     for g in listed:
-        if (g.get("state") or "") == "Deleting":
-            logger.info("Skipping %s: Azure is already deleting it", g.get("name"))
+        # Deleting groups out of an unexpected payload is worse than skipping
+        # it, so anything not shaped like {name, state} is left alone and named.
+        if not isinstance(g, dict) or not g.get("name"):
+            logger.warning("Ignoring unrecognised group entry: %r", g)
             continue
-        groups.append(g.get("name"))
+        if (g.get("state") or "") == "Deleting":
+            logger.info("Skipping %s: Azure is already deleting it", g["name"])
+            continue
+        groups.append(g["name"])
     if older_than_hours <= 0:
         return sorted(groups)
 

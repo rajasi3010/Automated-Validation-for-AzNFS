@@ -568,3 +568,32 @@ def test_a_group_that_really_survived_is_still_an_orphan(monkeypatch):
     ] if a[:2] == ("group", "list") else None)
 
     assert vm_janitor.orphan_groups(0) == ["lisa-stuck-e0"]
+
+
+def test_a_fresh_leak_is_swept_by_default(monkeypatch):
+    # The default is 0 for a reason: a leaked group is one LISA failed to
+    # delete, so its VMs are minutes old. Any grace period hides exactly the
+    # leak worth catching -- no deletion and, because nothing is eligible, no
+    # alert either.
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000+00:00")
+
+    def fake_az(*args):
+        if args[:2] == ("group", "list"):
+            return [{"name": "lisa-leaked-e0", "state": "Succeeded"}]
+        if args[:2] == ("vm", "list"):
+            return [now]
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+
+    assert vm_janitor.orphan_groups(0) == ["lisa-leaked-e0"]
+    assert vm_janitor.orphan_groups(2) == []  # what a grace period costs
+
+
+def test_an_unrecognised_group_entry_is_skipped_not_crashed_on(monkeypatch):
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [
+        "a-bare-string", {"state": "Succeeded"}, None,
+        {"name": "lisa-real-e0", "state": "Succeeded"},
+    ] if a[:2] == ("group", "list") else None)
+
+    assert vm_janitor.orphan_groups(0) == ["lisa-real-e0"]
