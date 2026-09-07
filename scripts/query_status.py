@@ -25,10 +25,11 @@ import aznfs_support
 import db_manager
 import status_rollup
 
-STATES = ("known_supported", "known_unsupported", "unknown")
+STATES = ("known_supported", "known_unsupported", "pending_publish", "unknown")
 _TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
+    "pending_publish": "Awaiting manual publish",
     "unknown": "Unknown / not yet validated",
 }
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -50,8 +51,6 @@ def load_buckets(
 ) -> dict[str, list[dict]]:
     """Return {state: [distro rollup, ...]} for the requested states."""
     records = db_manager.get_all_records(db_path)
-    if not include_excluded:
-        records = status_rollup.exclude_distros(records, status_rollup.prefixes_from_env())
     buckets = status_rollup.buckets_by_state(records, in_scope_only=not include_excluded)
     needle = distro.casefold()
     return {
@@ -122,14 +121,16 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
         for row in rows:
             line = (
                 f"  - {row.get('distro_label')} ({row.get('architecture')}) "
-                f"(latest {row.get('version')}; {_fmt(row.get('publishers', []))}; "
+                f"({row.get('image')} {row.get('version')}; "
+                f"{_fmt(row.get('publishers', []))}; "
                 f"{row.get('sku_count')} SKU(s))"
             )
-            if state == "known_unsupported" and row.get("reason"):
+            if state in status_rollup.REASON_STATES and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
-            if state == "known_unsupported":
-                for reason, group in status_rollup.group_skus_by_reason(row.get("skus", [])):
+            if state in status_rollup.REASON_STATES:
+                for reason, group in status_rollup.group_skus_by_reason(
+                        status_rollup.reason_bearing_skus(row.get("skus"))):
                     for s in group:
                         lines.append(f"      * {status_rollup.sku_label(s)}")
                     if reason:
@@ -139,8 +140,13 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
 
 
 def _sku_cell(row: dict) -> str:
-    """Failing images for one distro, grouped so a shared reason is stated once."""
-    skus = row.get("skus") or []
+    """Why this release is in its bucket, per image.
+
+    The group holds every SKU of the release, passing ones included, so only the
+    SKUs whose own state carries a reason are named -- listing the rest would
+    imply they failed too.
+    """
+    skus = status_rollup.reason_bearing_skus(row.get("skus"))
     if not skus:
         return row.get("reason") or "-"
     parts = []
@@ -175,20 +181,20 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         if not rows:
             out += ["_None._", ""]
             continue
-        unsupported = state == "known_unsupported"
-        header = "| Distro | Arch | Latest image version | Publishers | SKUs |"
-        divider = "| --- | --- | --- | --- | ---: |"
-        if unsupported:
-            header += " Failing SKUs |"
+        actionable = state in status_rollup.REASON_STATES
+        header = "| Distro | Arch | Image validated | Version | Publishers | SKUs |"
+        divider = "| --- | --- | --- | --- | --- | ---: |"
+        if actionable:
+            header += " Reason |"
             divider += " --- |"
         out += [header, divider]
         for row in rows:
             line = (
                 f"| {row.get('distro_label', '')} | {row.get('architecture', '')} "
-                f"| {row.get('version', '')} "
+                f"| `{row.get('image', '')}` | {row.get('version', '')} "
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
-            if unsupported:
+            if actionable:
                 line += f" {_sku_cell(row)} |"
             out.append(line)
         out.append("")

@@ -147,3 +147,39 @@ def test_monthly_reminder_shows_architecture_in_both_bodies(notifier):
     assert "Rocky 8 (x86_64)" in plain
     assert "Rocky 8 (arm64)" in plain
     assert ">Arch<" in html
+
+
+def test_monthly_subject_counts_pending_publish_when_there_is_any(notifier):
+    # The subject listed three buckets while the body had four, so its numbers
+    # would not add up to the total it quotes.
+    mod, email_client_cls = notifier
+    instance = email_client_cls.return_value
+    instance.begin_send.return_value.result.return_value = mock.Mock(id="msg-p")
+
+    def row(label, reason=""):
+        return {"distro_label": label, "architecture": "x86_64", "version": "1",
+                "publishers": ["p"], "sku_count": 1, "reason": reason, "skus": []}
+
+    mod.send_monthly_reminder({
+        "known_supported": [row("A")], "known_unsupported": [],
+        "pending_publish": [row("C", "publish it")], "unknown": [row("B")],
+    })
+
+    subject = instance.begin_send.call_args[0][0]["content"]["subject"]
+    assert "1 awaiting publish" in subject
+
+
+def test_monthly_subject_stays_quiet_when_nothing_is_pending(notifier):
+    # Nothing writes the state today, so an always-present "0 awaiting publish"
+    # would be noise in every subject line.
+    mod, email_client_cls = notifier
+    instance = email_client_cls.return_value
+    instance.begin_send.return_value.result.return_value = mock.Mock(id="msg-q")
+
+    mod.send_monthly_reminder({
+        "known_supported": [], "known_unsupported": [],
+        "pending_publish": [], "unknown": [],
+    })
+
+    subject = instance.begin_send.call_args[0][0]["content"]["subject"]
+    assert "awaiting publish" not in subject

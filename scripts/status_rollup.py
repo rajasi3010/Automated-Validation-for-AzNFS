@@ -10,6 +10,9 @@ import re
 import aznfs_support
 import db_manager
 
+# States where the reason is the actionable part of the status.
+REASON_STATES = ("known_unsupported", "pending_publish")
+
 _DEFAULT_EXCLUDED_PREFIXES = "centos"
 
 _UUID_RE = re.compile(
@@ -60,6 +63,15 @@ def sku_label(sku: dict) -> str:
     return f"{sku.get('image', '')}/{sku.get('sku', '')} ({sku.get('architecture', '')})"
 
 
+def reason_bearing_skus(skus: list[dict]) -> list[dict]:
+    """The SKUs that explain a release's bucket.
+
+    A group holds every SKU of the release, passing ones included, so naming all
+    of them under an actionable bucket would imply they all failed.
+    """
+    return [s for s in (skus or []) if s.get("state") in REASON_STATES]
+
+
 def group_skus_by_reason(skus: list[dict]) -> list[tuple[str, list[dict]]]:
     """Collapse SKUs that failed identically, so the reason is stated once.
 
@@ -76,13 +88,13 @@ def group_skus_by_reason(skus: list[dict]) -> list[tuple[str, list[dict]]]:
 def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[str, list[dict]]:
     """Group tracked images into per-validation-state buckets for the monthly reminder.
 
-    Buckets are ``known_supported`` / ``known_unsupported`` / ``unknown`` (the
-    last also folds in the not-yet-decided ``pending_*`` states). For each
-    (state, distro_label, architecture) the latest version observed is kept, with
-    the contributing publishers and the number of SKUs. Returns
-    {state: [distro,...]}. A release therefore appears once PER ARCHITECTURE,
-    and legitimately lands in different buckets when its arm64 and x86_64 SKUs
-    disagree -- which is the unit Phase 2 and Phase 3 actually validate.
+    Buckets are ``known_supported`` / ``known_unsupported`` / ``pending_publish``
+    / ``unknown``. Grouped by (distro_label, architecture) -- the unit Phase 2
+    and Phase 3 validate -- and each group's bucket, version and reason come from
+    the ONE SKU the pipeline would pick, so a release appears exactly once per
+    architecture and the row describes a single image rather than a blend of
+    several. Every SKU stays under ``skus`` with its own state, so a group whose
+    SKUs disagree is still inspectable. Returns {state: [distro,...]}.
 
     Distros outside the AzNFS support matrix are dropped by default: they are
     scanned and stored, but never handed to Phase 2/3, so reporting them as
@@ -97,65 +109,67 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
     """
     def _state_of(img: dict) -> str:
         v = img.get("validated", "") or ""
-        if v == "known_supported":
-            return "known_supported"
-        if v == "known_unsupported":
-            return "known_unsupported"
-        return "unknown"  # unknown + pending_publish + new
+        if v in ("known_supported", "known_unsupported", "pending_publish"):
+            return v
+        return "unknown"  # unknown + new
 
     if in_scope_only:
+        # Both filters live here rather than in each caller: three surfaces read
+        # this rollup, and one of them forgetting a filter is exactly how the
+        # page and the e-mail came to disagree.
+        records = exclude_distros(records, prefixes_from_env())
         records = [r for r in records
                    if aznfs_support.is_supported_distro(r.get("distro_label", ""))]
 
-    groups: dict[tuple[str, str, str], dict] = {}
+    # Keyed on (release, architecture) -- the unit Phase 2 and Phase 3 validate.
+    # The bucket comes from the ONE SKU the pipeline would actually pick, not
+    # from every SKU: a release owns dozens whose states disagree, so grouping
+    # by state as well would list the same release as supported AND unsupported
+    # AND unvalidated at once, and none of the three would be its real status.
+    groups: dict[tuple[str, str], dict] = {}
     for img in records:
-        state = _state_of(img)
-        # Architecture is part of the key because it is part of the unit Phase 2
-        # and Phase 3 validate: a release can pass on x86_64 and fail on arm64,
-        # and collapsing them puts one release in two buckets with no way to see
-        # which half is broken.
-        key = (state, img.get("distro_label", ""), img.get("architecture", ""))
+        key = (img.get("distro_label", ""), img.get("architecture", ""))
         g = groups.get(key)
         if g is None:
             g = {
-                "state": state,
-                "distro_label": key[1],
-                "architecture": key[2],
-                "version": img.get("version", ""),
+                "distro_label": key[0],
+                "architecture": key[1],
                 "publishers": set(),
                 "sku_count": 0,
-                "reasons": set(),
                 "skus": [],
+                "rep": img,
             }
             groups[key] = g
+        elif aznfs_support.is_preferred_image(img, g["rep"], db_manager.version_tuple):
+            g["rep"] = img
         if img.get("publisher"):
             g["publishers"].add(img["publisher"])
-        # Numeric: '9.10.x' is newer than '9.8.x' but sorts below it as a string.
-        if db_manager.version_tuple(img.get("version", "")) > db_manager.version_tuple(g["version"]):
-            g["version"] = img["version"]
-        # Collect the distinct verdict reasons -- only meaningful for unsupported.
-        r = redact((img.get("reason") or "").strip())
-        if state == "known_unsupported" and r:
-            g["reasons"].add(r)
         g["skus"].append({
             "image": img.get("image", ""),
             "sku": img.get("sku", ""),
             "architecture": img.get("architecture", ""),
             "version": img.get("version", ""),
-            "reason": r,
+            "state": _state_of(img),
+            "reason": redact((img.get("reason") or "").strip()),
         })
         g["sku_count"] += 1
 
     buckets: dict[str, list[dict]] = {}
     for g in groups.values():
-        buckets.setdefault(g["state"], []).append(
+        state = _state_of(g["rep"])
+        # The reason belongs to the SKU that produced the verdict; on a passing
+        # or unvalidated release there is nothing to explain.
+        reason = (redact((g["rep"].get("reason") or "").strip())
+                  if state in REASON_STATES else "")
+        buckets.setdefault(state, []).append(
             {
                 "distro_label": g["distro_label"],
                 "architecture": g["architecture"],
-                "version": g["version"],
+                "version": g["rep"].get("version", ""),
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
-                "reason": "; ".join(sorted(g["reasons"])),
+                "reason": reason,
+                "image": f"{g['rep'].get('image', '')}/{g['rep'].get('sku', '')}",
                 "skus": sorted(g["skus"], key=lambda s: (s["architecture"], s["image"], s["sku"])),
             }
         )

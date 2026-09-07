@@ -6,9 +6,12 @@ Linux images, checks whether the AzNFS package is published for them on PMC
 distro with **LISA**, and records a per-distro support decision — all unattended
 on a self-hosted runner.
 
-**➡ [Current validation status](STATUS.md)** — which distros are supported,
+**➡ [Current validation status](../../blob/status-page/STATUS.md)** — which distros are supported,
 unsupported (with the reason), or not yet validated. Regenerated automatically
 by the pipeline; no setup needed to read it.
+
+It lives on the `status-page` branch, not here: `master` is protected, so a push
+from CI is rejected and the page would silently freeze.
 
 ## Pipeline overview
 
@@ -213,7 +216,7 @@ highlights:
 | `family` | `apt` or `yum` — used by Phase 2 gates. |
 | `distro_label` | Human-readable name, e.g. `Ubuntu 24.04`, `RHEL 9`, `Rocky 9`. |
 | `version` | Latest version observed. Bumped in place on a new release. |
-| `validated` | The persisted validation state. Three values are written in practice: `unknown`, `known_supported`, and `known_unsupported`. (`pending_publish` is a label in the summary e-mail; no code writes it today, but the schema permits it and Phase 2 re-queues any row found in that state — see the Phase 2 section below.) **Preserved across version bumps** so manual validation state is not lost. Surfaced in the Phase 1 JSON as `validation_status`. |
+| `validated` | The persisted validation state. Three values are written in practice: `unknown`, `known_supported`, and `known_unsupported`. (`pending_publish` is reported as its own bucket on the status page, in the monthly digest and in the Phase 3 summary; no code writes it today, but the schema permits it and Phase 2 re-queues any row found in that state — see the Phase 2 section below.) **Preserved across version bumps** so manual validation state is not lost. Surfaced in the Phase 1 JSON as `validation_status`. |
 | `last_validated`, `last_validated_version`, `last_validated_image_version`, `last_regressed_version` | Stamped by Phase 2/3 when a verdict is recorded: the timestamp, the validated AzNFS version + marketplace image (Gate 3's re-validation baselines), and the AzNFS version that regressed on an already-supported distro (if any). |
 | `verdict_source` | Which phase decided: `gate` (Phase 2 repo/package lookup) or `lisa` (Phase 3 ran the suite on a VM). Phase 2 re-checks its own `gate` verdicts every run, so a `known_unsupported` that was stale heals itself; `lisa` verdicts are left alone so a failing distro is not re-provisioned daily. Also holds `probe_error`, which is **not** a verdict: it means the last check could not reach PMC, so `validated` was left untouched and the row is retried on the next run. Any real verdict clears it. |
 | `date_added`, `last_modified`, `last_checked` | All reset to "now" on a version bump. |
@@ -299,12 +302,12 @@ the repo root) and `--include-excluded` shows distros normally hidden by
 `EXCLUDED_DISTRO_PREFIXES`. The rollup itself lives in `scripts/status_rollup.py`,
 shared with the monthly e-mail, so both always agree.
 
-The same rollup is published as [`STATUS.md`](STATUS.md) in the repo root, so
-anyone can read the current buckets on GitHub. Phase 3 regenerates it
-(`--format markdown`) via `.github/scripts/publish_status.sh` at the end of every
-run — after the verdicts are written — and commits it only when it changed; the
-page is also appended to the run's Actions summary. It is generated output —
-edit the pipeline, never the file.
+The same rollup is published as [`STATUS.md`](../../blob/status-page/STATUS.md) on the
+`status-page` branch, so anyone can read the current buckets on GitHub. Phase 3
+regenerates it (`--format markdown`) via `.github/scripts/publish_status.sh` at the end of every
+run — after the verdicts are written — and force-pushes one throwaway commit per
+refresh; the page is also appended to the run's Actions summary. It is generated
+output — edit the pipeline, never the file.
 
 **Phase 2.** Exactly **one** summary e-mail per run, listing every image and —
 for the actionable ones — the reason (to Phase 3, trusted, pending publish, or

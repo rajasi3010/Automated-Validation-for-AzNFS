@@ -101,13 +101,14 @@ def send_phase1_summary(
     _send(subject, plain, html_body, recipients)
 
 
-# Validation-state display order + titles for the monthly reminder. The three
-# groups the monthly digest is split into; "unknown" also folds in the
-# not-yet-decided pending_* states (anything without a final supported verdict).
-_STATE_ORDER = ["known_supported", "known_unsupported", "unknown"]
+# Validation-state display order + titles for the monthly reminder. pending_publish
+# is its own group: a release waiting on a manual publish is not the same as one
+# nobody has looked at yet, and the reason there is the action to take.
+_STATE_ORDER = ["known_supported", "known_unsupported", "pending_publish", "unknown"]
 _STATE_TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
+    "pending_publish": "Awaiting manual publish",
     "unknown": "Unknown (not yet validated)",
 }
 
@@ -123,7 +124,8 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
     cols = [
         ("distro_label", "Distro"),
         ("architecture", "Arch"),
-        ("version", "Latest version"),
+        ("image", "Image validated"),
+        ("version", "Version"),
         ("publishers", "Publishers"),
         ("sku_count", "# SKUs"),
     ]
@@ -141,10 +143,11 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
             for key, _ in cols
         )
         body += f"<tr>{cells}</tr>"
-        if with_skus and d.get("skus"):
+        detail = status_rollup.reason_bearing_skus(d.get("skus"))
+        if with_skus and detail:
             body += (
                 f"<tr><td colspan='{len(cols)}' style='padding:2px 8px 8px 24px;"
-                f"font-size:12px;color:#555'>{_sku_list_html(d['skus'])}</td></tr>"
+                f"font-size:12px;color:#555'>{_sku_list_html(detail)}</td></tr>"
             )
     return (
         "<table style='border-collapse:collapse;font-family:Segoe UI,sans-serif;"
@@ -170,10 +173,10 @@ def send_monthly_reminder(
 ) -> None:
     """Monthly reminder: every tracked distro release, grouped by validation state.
 
-    Three groups ΓÇö known_supported / known_unsupported / unknown (the last also
-    folds in the not-yet-decided pending_* states). ``buckets`` maps each state
-    key to a distro-rollup list (one entry per OS release, with its latest
-    version, contributing publishers and SKU count). Sent at most once per
+    Four groups — known_supported / known_unsupported / pending_publish / unknown.
+    ``buckets`` maps each state key to a distro-rollup list (one entry per OS
+    release and architecture, naming the image the pipeline would validate, that
+    image's version, contributing publishers and SKU count). Sent at most once per
     calendar month (on the first scan of the month), so the daily "nothing new"
     runs stay silent while the team still gets a periodic snapshot of everything
     tracked, by category.
@@ -188,10 +191,15 @@ def send_monthly_reminder(
     total_skus = sum(d.get("sku_count", 0) for s in states for d in buckets.get(s, []))
     counts = {s: len(buckets.get(s, [])) for s in _STATE_ORDER}
 
+    # Named only when non-zero: nothing writes pending_publish today, so it would
+    # otherwise read as a permanent "0 awaiting publish" in every subject.
+    pending = counts.get("pending_publish", 0)
+    pending_subject = f", {pending} awaiting publish" if pending else ""
     subject = (
         f"[AzFilesAutoPackager] Monthly reminder: "
         f"{counts['known_supported']} supported, "
-        f"{counts['known_unsupported']} unsupported, "
+        f"{counts['known_unsupported']} unsupported"
+        f"{pending_subject}, "
         f"{counts['unknown']} unknown"
     )
 
@@ -208,16 +216,17 @@ def send_monthly_reminder(
             for d in rows:
                 line = (
                     f"  - {d.get('distro_label')} ({d.get('architecture')}) "
-                    f"(latest {d.get('version')}; {_fmt(d.get('publishers', []))}; "
+                    f"({d.get('image')} {d.get('version')}; {_fmt(d.get('publishers', []))}; "
                     f"{d.get('sku_count')} SKU(s))"
                 )
-                if st == "known_unsupported" and d.get("reason"):
+                if st in status_rollup.REASON_STATES and d.get("reason"):
                     line += f" -- {d['reason']}"
                 plain_parts.append(line)
                 # Name the exact images that failed: a distro release covers very
                 # different SKUs (server, minimal, cvm, pro, arm64).
-                if st == "known_unsupported":
-                    for reason, group in status_rollup.group_skus_by_reason(d.get("skus", [])):
+                if st in status_rollup.REASON_STATES:
+                    for reason, group in status_rollup.group_skus_by_reason(
+                            status_rollup.reason_bearing_skus(d.get("skus"))):
                         for s in group:
                             plain_parts.append(f"      * {status_rollup.sku_label(s)}")
                         if reason:
@@ -231,8 +240,8 @@ def send_monthly_reminder(
     for st in states:
         rows = buckets.get(st, [])
         title = _STATE_TITLES.get(st, st)
-        # The verdict reason only applies to the known_unsupported bucket.
-        with_reason = st == "known_unsupported"
+        # Reasons belong to the actionable buckets, not just unsupported ones.
+        with_reason = st in status_rollup.REASON_STATES
         sections += (
             f"<h4 style='font-family:Segoe UI,sans-serif;margin:12px 0 4px'>"
             f"{html.escape(title)} "

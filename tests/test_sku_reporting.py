@@ -30,7 +30,8 @@ def test_rollup_carries_the_individual_skus():
     assert unsupported["sku_count"] == 1
     assert unsupported["skus"] == [{
         "image": "ubuntu-24_04-lts", "sku": "minimal-arm64", "architecture": "arm64",
-        "version": "24.04.1", "reason": "prod repo is missing",
+        "version": "24.04.1", "state": "known_unsupported",
+        "reason": "prod repo is missing",
     }]
     # The passing SKU stays visible under its own state.
     assert buckets["known_supported"][0]["skus"][0]["sku"] == "server"
@@ -51,7 +52,8 @@ def test_digest_email_names_the_failing_skus(monkeypatch):
         "distro_label": "Ubuntu 24.04", "version": "24.04.1", "publishers": ["Canonical"],
         "sku_count": 1, "reason": "prod repo is missing",
         "skus": [{"image": "ubuntu-24_04-lts", "sku": "minimal-arm64",
-                  "architecture": "arm64", "reason": "prod repo is missing"}],
+                  "architecture": "arm64", "state": "known_unsupported",
+                  "reason": "prod repo is missing"}],
     }]}
     sent = {}
 
@@ -86,8 +88,10 @@ def test_skus_sharing_a_reason_are_listed_once_with_it():
     # Whole releases usually fail identically; repeating a 70-char reason per
     # SKU buries the one thing that matters -- which images are affected.
     skus = [
-        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
-        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
         {"image": "debian-11-daily", "sku": "11-arm", "architecture": "arm64", "reason": "repo missing"},
     ]
 
@@ -99,8 +103,10 @@ def test_skus_sharing_a_reason_are_listed_once_with_it():
 
 def test_markdown_cell_states_a_shared_reason_once():
     row = {"skus": [
-        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
-        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
     ]}
 
     cell = query_status._sku_cell(row)
@@ -111,6 +117,105 @@ def test_markdown_cell_states_a_shared_reason_once():
 
 
 def test_skus_with_no_reason_are_listed_without_a_dash():
-    row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64", "reason": ""}]}
+    row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64",
+                            "state": "known_unsupported", "reason": ""}]}
 
     assert query_status._sku_cell(row) == "`img/s (x86_64)`"
+
+
+def test_a_release_lands_in_exactly_one_bucket_per_arch():
+    # A release owns many SKUs whose states disagree. Bucketing each one put the
+    # same release under supported AND unsupported AND unvalidated at once, so
+    # the page could not answer "what is the state of this distro?".
+    records = [
+        _img("Ubuntu 22.04", "known_unsupported", "0001-com-ubuntu-pro-jammy-fips",
+             "pro-fips-22_04", reason="plan not accepted"),
+        _img("Ubuntu 22.04", "", "ubuntu-22_04-lts", "server"),
+        _img("Ubuntu 22.04", "known_supported", "ubuntu-22_04-lts-daily", "server"),
+    ]
+
+    buckets = buckets_by_state(records)
+    appearances = [
+        (state, d) for state, rows in buckets.items() for d in rows
+        if d["distro_label"] == "Ubuntu 22.04"
+    ]
+
+    assert len(appearances) == 1
+    state, entry = appearances[0]
+    # The plan-free plain image is what the pipeline validates, so its state wins.
+    assert entry["image"] == "ubuntu-22_04-lts/server"
+    assert state == "unknown"
+    assert entry["sku_count"] == 3          # the others stay visible underneath
+
+
+def test_pending_publish_is_its_own_bucket_and_keeps_its_reason():
+    records = [_img("Ubuntu 26.04", "pending_publish", "ubuntu-26_04-lts", "server",
+                    reason="publish aznfs to prod, then re-run")]
+
+    buckets = buckets_by_state(records)
+
+    assert [d["distro_label"] for d in buckets["pending_publish"]] == ["Ubuntu 26.04"]
+    assert buckets["pending_publish"][0]["reason"].startswith("publish aznfs")
+
+
+def test_a_passing_release_carries_no_reason():
+    records = [_img("Rocky 9", "known_supported", "rockylinux-x86_64", "9-base",
+                    reason="a stale reason from an earlier verdict")]
+
+    assert buckets_by_state(records)["known_supported"][0]["reason"] == ""
+
+
+def test_the_version_shown_belongs_to_the_image_shown():
+    # The row describes one image; taking the newest version across the group
+    # put a different SKU's version next to it. RHEL 7 advertised a 2026 image
+    # while the one actually validated was from 2023.
+    records = [
+        _img("RHEL 7", "known_supported", "RHEL", "7-LVM", version="7.9.2023032012"),
+        _img("RHEL 7", "", "RHEL-RAW", "7-raw", version="7.9.2026031104"),
+    ]
+
+    entry = [d for rows in buckets_by_state(records).values() for d in rows][0]
+
+    assert entry["image"] == "RHEL/7-LVM"
+    assert entry["version"] == "7.9.2023032012"
+
+
+def test_text_output_names_only_the_skus_that_explain_the_bucket():
+    # Groups now hold passing SKUs too, so an unfiltered breakdown would list
+    # images that never failed under an actionable bucket.
+    records = [
+        _img("Ubuntu 26.04", "known_unsupported", "ubuntu-26_04-lts", "server",
+             reason="prod repo is missing"),
+        _img("Ubuntu 26.04", "known_supported", "ubuntu-26_04-lts", "minimal"),
+    ]
+
+    text = query_status.render_text(buckets_by_state(records))
+
+    assert "ubuntu-26_04-lts/server" in text
+    assert "ubuntu-26_04-lts/minimal" not in text
+
+
+def test_text_output_breaks_down_pending_publish_too():
+    # It was gated on known_unsupported, so the one state whose reason is an
+    # instruction got no per-SKU detail at all.
+    records = [_img("Ubuntu 26.04", "pending_publish", "ubuntu-26_04-lts", "server",
+                    reason="publish aznfs to prod")]
+
+    text = query_status.render_text(buckets_by_state(records))
+
+    assert "ubuntu-26_04-lts/server" in text
+    assert "publish aznfs to prod" in text
+
+
+def test_digest_does_not_emit_an_empty_detail_list(monkeypatch):
+    # The guard checked the raw SKU list while the body rendered the filtered
+    # one, so a group with nothing to explain produced an empty bullet list.
+    records = [_img("Ubuntu 26.04", "known_unsupported", "ubuntu-26_04-lts", "server")]
+    sent = {}
+    monkeypatch.setattr(notifier, "_send",
+                        lambda subject, plain, html_body, recipients: sent.update(
+                            {"html": html_body}))
+
+    notifier.send_monthly_reminder(buckets_by_state(records), recipients=["a@b.c"])
+
+    assert "<ul" not in sent["html"] or "<li>" in sent["html"]
