@@ -337,9 +337,10 @@ def enrich_and_merge(entries: list[dict], db_mod: Any, db_path: str) -> list[dic
             out.append({**row, "_db_state": "known_unsupported"})
 
         # Rows whose last check could not reach PMC, and rows whose Phase 3 VM
-        # run never produced a verdict (deploy/auth/quota). Both carry only the
-        # marker -- no verdict -- and `unknown` rows are not re-fed by anything
-        # else, so without this a release stranded by one bad run would wait for
+        # run never produced a verdict (deploy/auth/quota). The marker says the
+        # LAST run reached no new verdict -- the row keeps whatever verdict it
+        # already had, deliberately -- and nothing else re-feeds a row on that
+        # basis, so without this a release stranded by one bad run would wait for
         # Phase 1 to re-emit its image, which only happens when it changes.
         for source, why in ((_PROBE_ERROR, "could not reach PMC"),
                             (_LISA_INFRA_ERROR, "Phase 3 could not test it")):

@@ -519,7 +519,7 @@ def test_migrated_columns_match_the_canonical_schema(tmp_path, monkeypatch):
     cols = {r[1]: r for r in conn.execute("PRAGMA table_info(images)")}
     conn.close()
 
-    canonical = pathlib.Path("db/schema.sql").read_text()
+    canonical = (pathlib.Path(__file__).resolve().parents[1] / "db" / "schema.sql").read_text()
     for name in ("last_checked", "reason", "verdict_source",
                  "last_validated_version", "last_regressed_version"):
         notnull, default = cols[name][3], cols[name][4]
