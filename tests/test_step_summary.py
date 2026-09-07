@@ -35,7 +35,7 @@ def test_summary_reports_an_empty_backlog(tmp_path, monkeypatch):
     assert "0 distro release(s) awaiting validation" in out.read_text()
 
 
-def test_summary_is_a_no_op_outside_actions(tmp_path, monkeypatch):
+def test_summary_is_a_no_op_outside_actions(monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
 
     scan_marketplace.write_step_summary(_ROLLUP, total_tracked=42)  # must not raise
