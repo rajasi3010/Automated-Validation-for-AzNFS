@@ -248,6 +248,12 @@ jobs:
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
           PHASE3_RESOURCE_GROUP: ${{ vars.PHASE3_RESOURCE_GROUP }}
+          # Hours a tagged group may live before the janitor removes it. Default 0
+          # (sweep on sight): a leaked group is one LISA failed to delete, so its
+          # VMs are minutes old and any grace period would hide exactly the leak
+          # worth catching. Raise it temporarily to hold an environment for
+          # debugging -- that is the only case a non-zero value is for.
+          PHASE3_SWEEP_GRACE_HOURS: ${{ vars.PHASE3_SWEEP_GRACE_HOURS }}
           # Same venv the validation step uses -- the alert needs its packages.
           LISA_VENV: ${{ vars.LISA_VENV }}
         run: |
@@ -258,7 +264,7 @@ jobs:
           # VM here and everything from this run is finished with. With no RG
           # pinned the janitor sweeps the tagged groups LISA failed to delete.
           # Built as an array so the RG name is unambiguously one argument.
-          ARGS=(--older-than-hours 0 --alert)
+          ARGS=(--older-than-hours "${PHASE3_SWEEP_GRACE_HOURS:-0}" --alert)
           if [ -n "${PHASE3_RESOURCE_GROUP:-}" ]; then
             ARGS=(--resource-group "$PHASE3_RESOURCE_GROUP" "${ARGS[@]}")
           fi

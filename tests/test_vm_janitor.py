@@ -185,7 +185,7 @@ def test_orphan_groups_are_swept_when_no_rg_is_pinned(monkeypatch):
 
     def fake_az(*args):
         if args[:2] == ("group", "list"):
-            return ["lisa-20260905-1-e0", "lisa-20260905-1-e1"]
+            return [{"name": "lisa-20260905-1-e0", "state": "Succeeded"}, {"name": "lisa-20260905-1-e1", "state": "Succeeded"}]
         if args[:3] == ("group", "delete", "--name"):
             deleted.append(args[3])
         return None
@@ -203,7 +203,7 @@ def test_a_group_holding_a_fresh_vm_is_left_alone(monkeypatch):
 
     def fake_az(*args):
         if args[:2] == ("group", "list"):
-            return ["lisa-live-e0"]
+            return [{"name": "lisa-live-e0", "state": "Succeeded"}]
         if args[:2] == ("vm", "list"):
             return [fresh]
         return None
@@ -219,7 +219,7 @@ def test_an_orphan_group_alerts_even_when_deletion_succeeds(monkeypatch):
 
     def fake_az(*args):
         if args[:2] == ("group", "list"):
-            return ["lisa-orphan-e0"]
+            return [{"name": "lisa-orphan-e0", "state": "Succeeded"}]
         return None
 
     monkeypatch.setattr(vm_janitor, "_az", fake_az)
@@ -403,7 +403,7 @@ def test_a_group_of_undatable_vms_is_kept(monkeypatch):
     # delete the whole group out from under a running environment.
     def fake_az(*args):
         if args[:2] == ("group", "list"):
-            return ["lisa-odd-e0"]
+            return [{"name": "lisa-odd-e0", "state": "Succeeded"}]
         if args[:2] == ("vm", "list"):
             return ["not-a-date"]
         return None
@@ -416,7 +416,7 @@ def test_an_empty_group_is_still_swept(monkeypatch):
     # No VMs at all is a genuine orphan, not an unknown age.
     def fake_az(*args):
         if args[:2] == ("group", "list"):
-            return ["lisa-empty-e0"]
+            return [{"name": "lisa-empty-e0", "state": "Succeeded"}]
         if args[:2] == ("vm", "list"):
             return []
         return None
@@ -443,7 +443,7 @@ def test_a_stalled_group_deletion_is_reported_again_next_run(monkeypatch):
     alerts = []
     monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
     monkeypatch.setattr(vm_janitor, "_az",
-                        lambda *a: ["lisa-stuck-e0"] if a[:2] == ("group", "list") else None)
+                        lambda *a: [{"name": "lisa-stuck-e0", "state": "Succeeded"}] if a[:2] == ("group", "list") else None)
 
     for _ in range(2):                       # the delete never actually lands
         assert vm_janitor.main(["--older-than-hours", "0", "--alert"]) == 0
@@ -520,7 +520,7 @@ def test_a_dry_run_group_alert_does_not_claim_deletions_were_attempted(monkeypat
     alerts = []
     monkeypatch.setattr(vm_janitor, "_alert", lambda scope, detail: alerts.append(detail))
     monkeypatch.setattr(vm_janitor, "_az",
-                        lambda *a: ["lisa-orphan-e0"] if a[:2] == ("group", "list") else None)
+                        lambda *a: [{"name": "lisa-orphan-e0", "state": "Succeeded"}] if a[:2] == ("group", "list") else None)
 
     vm_janitor.main(["--dry-run", "--alert"])
 
@@ -549,3 +549,51 @@ def test_undatable_is_not_reported_without_a_cutoff(monkeypatch):
 
     assert "1 VM(s) would be deleted" in alerts[0]
     assert "1 left running" not in alerts[0]
+
+
+def test_a_group_azure_is_already_deleting_is_not_an_orphan(monkeypatch):
+    # LISA deletes without waiting, so a group it removed seconds earlier is
+    # still listed. Counting it alerts about cleanup that did in fact run.
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [
+        {"name": "lisa-going-e2", "state": "Deleting"},
+    ] if a[:2] == ("group", "list") else None)
+
+    assert vm_janitor.orphan_groups(0) == []
+
+
+def test_a_group_that_really_survived_is_still_an_orphan(monkeypatch):
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [
+        {"name": "lisa-going-e2", "state": "Deleting"},
+        {"name": "lisa-stuck-e0", "state": "Succeeded"},
+    ] if a[:2] == ("group", "list") else None)
+
+    assert vm_janitor.orphan_groups(0) == ["lisa-stuck-e0"]
+
+
+def test_a_fresh_leak_is_swept_by_default(monkeypatch):
+    # The default is 0 for a reason: a leaked group is one LISA failed to
+    # delete, so its VMs are minutes old. Any grace period hides exactly the
+    # leak worth catching -- no deletion and, because nothing is eligible, no
+    # alert either.
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000+00:00")
+
+    def fake_az(*args):
+        if args[:2] == ("group", "list"):
+            return [{"name": "lisa-leaked-e0", "state": "Succeeded"}]
+        if args[:2] == ("vm", "list"):
+            return [now]
+        return None
+
+    monkeypatch.setattr(vm_janitor, "_az", fake_az)
+
+    assert vm_janitor.orphan_groups(0) == ["lisa-leaked-e0"]
+    assert vm_janitor.orphan_groups(2) == []  # what a grace period costs
+
+
+def test_an_unrecognised_group_entry_is_skipped_not_crashed_on(monkeypatch):
+    monkeypatch.setattr(vm_janitor, "_az", lambda *a: [
+        "a-bare-string", {"state": "Succeeded"}, None,
+        {"name": "lisa-real-e0", "state": "Succeeded"},
+    ] if a[:2] == ("group", "list") else None)
+
+    assert vm_janitor.orphan_groups(0) == ["lisa-real-e0"]

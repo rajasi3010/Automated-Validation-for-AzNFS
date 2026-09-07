@@ -193,11 +193,26 @@ def orphan_groups(older_than_hours: float) -> list[str]:
     where LISA makes one group per environment and deletes it itself. A group
     still standing afterwards means that cleanup did not happen.
 
+    Groups Azure is already tearing down are not orphans. LISA deletes without
+    waiting, so a group it removed seconds earlier is still listed, and counting
+    it raises an alert about cleanup that did in fact run.
+
     Age is taken from the newest VM inside, because resource groups carry no
     creation timestamp. A group with no VMs left is treated as sweepable.
     """
-    groups = _az("group", "list", "--tag", f"{OWNER_TAG}={OWNER_VALUE}",
-                 "--query", "[].name") or []
+    listed = _az("group", "list", "--tag", f"{OWNER_TAG}={OWNER_VALUE}",
+                 "--query", "[].{name:name,state:properties.provisioningState}") or []
+    groups = []
+    for g in listed:
+        # Deleting groups out of an unexpected payload is worse than skipping
+        # it, so anything not shaped like {name, state} is left alone and named.
+        if not isinstance(g, dict) or not g.get("name"):
+            logger.warning("Ignoring unrecognised group entry: %r", g)
+            continue
+        if (g.get("state") or "") == "Deleting":
+            logger.info("Skipping %s: Azure is already deleting it", g["name"])
+            continue
+        groups.append(g["name"])
     if older_than_hours <= 0:
         return sorted(groups)
 
