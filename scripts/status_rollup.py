@@ -104,15 +104,20 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
         records = [r for r in records
                    if aznfs_support.is_supported_distro(r.get("distro_label", ""))]
 
-    groups: dict[tuple[str, str], dict] = {}
+    groups: dict[tuple[str, str, str], dict] = {}
     for img in records:
         state = _state_of(img)
-        key = (state, img.get("distro_label", ""))
+        # Architecture is part of the key because it is part of the unit Phase 2
+        # and Phase 3 validate: a release can pass on x86_64 and fail on arm64,
+        # and collapsing them puts one release in two buckets with no way to see
+        # which half is broken.
+        key = (state, img.get("distro_label", ""), img.get("architecture", ""))
         g = groups.get(key)
         if g is None:
             g = {
                 "state": state,
                 "distro_label": key[1],
+                "architecture": key[2],
                 "version": img.get("version", ""),
                 "publishers": set(),
                 "sku_count": 0,
@@ -143,6 +148,7 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
         buckets.setdefault(g["state"], []).append(
             {
                 "distro_label": g["distro_label"],
+                "architecture": g["architecture"],
                 "version": g["version"],
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
@@ -151,5 +157,5 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
             }
         )
     for st in buckets:
-        buckets[st].sort(key=lambda d: d["distro_label"])
+        buckets[st].sort(key=lambda d: (d["distro_label"], d["architecture"]))
     return buckets

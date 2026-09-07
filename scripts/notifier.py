@@ -122,6 +122,7 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
                          with_skus: bool = False) -> str:
     cols = [
         ("distro_label", "Distro"),
+        ("architecture", "Arch"),
         ("version", "Latest version"),
         ("publishers", "Publishers"),
         ("sku_count", "# SKUs"),

@@ -139,3 +139,31 @@ def test_the_page_and_the_monthly_digest_stay_in_step(tmp_path):
 
     assert {s: [d["distro_label"] for d in rows] for s, rows in page.items() if rows} == \
            {s: [d["distro_label"] for d in rows] for s, rows in digest.items() if rows}
+
+
+def test_a_release_is_bucketed_per_architecture(tmp_path):
+    # Rocky 8 passes on x86_64 and fails on arm64. Collapsing the two put one
+    # release in two buckets with no way to see which half was broken.
+    db = _db(tmp_path)
+    for arch, state in (("x86_64", "known_supported"), ("arm64", "known_unsupported")):
+        ident = ("resf", "rockylinux-x86_64", f"8-base-{arch}", "eastus", arch)
+        db_manager.check_and_upsert(db, *ident[:3], "8.10.1", ident[3], ident[4],
+                                    "yum", "Rocky 8")
+        db_manager.set_validation_state(db, ident, state,
+                                        reason="" if arch == "x86_64" else "plan not accepted")
+
+    buckets = query_status.load_buckets(db)
+    supported = [(d["distro_label"], d["architecture"]) for d in buckets["known_supported"]]
+    unsupported = [(d["distro_label"], d["architecture"]) for d in buckets["known_unsupported"]]
+
+    assert ("Rocky 8", "x86_64") in supported
+    assert ("Rocky 8", "arm64") in unsupported
+    assert ("Rocky 8", "arm64") not in supported
+
+
+def test_every_bucket_row_carries_its_architecture(tmp_path):
+    buckets = query_status.load_buckets(_db(tmp_path))
+
+    for rows in buckets.values():
+        for row in rows:
+            assert row.get("architecture"), f"{row['distro_label']} has no arch"

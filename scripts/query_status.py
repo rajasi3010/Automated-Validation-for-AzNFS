@@ -121,7 +121,7 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
             lines.append("  (none)")
         for row in rows:
             line = (
-                f"  - {row.get('distro_label')} "
+                f"  - {row.get('distro_label')} ({row.get('architecture')}) "
                 f"(latest {row.get('version')}; {_fmt(row.get('publishers', []))}; "
                 f"{row.get('sku_count')} SKU(s))"
             )
@@ -176,15 +176,16 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
             out += ["_None._", ""]
             continue
         unsupported = state == "known_unsupported"
-        header = "| Distro | Latest image version | Publishers | SKUs |"
-        divider = "| --- | --- | --- | ---: |"
+        header = "| Distro | Arch | Latest image version | Publishers | SKUs |"
+        divider = "| --- | --- | --- | --- | ---: |"
         if unsupported:
             header += " Failing SKUs |"
             divider += " --- |"
         out += [header, divider]
         for row in rows:
             line = (
-                f"| {row.get('distro_label', '')} | {row.get('version', '')} "
+                f"| {row.get('distro_label', '')} | {row.get('architecture', '')} "
+                f"| {row.get('version', '')} "
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
             if unsupported:
