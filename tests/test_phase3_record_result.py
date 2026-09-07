@@ -526,3 +526,111 @@ def test_migrated_columns_match_the_canonical_schema(tmp_path, monkeypatch):
         if f"{name} " in canonical and "NOT NULL" in canonical.split(name, 1)[1][:40]:
             assert notnull == 1, f"{name} should be NOT NULL like db/schema.sql"
             assert default is not None, f"{name} needs a default to migrate"
+
+
+def _cov_db(tmp_path, rows):
+    db = tmp_path / "m.db"
+    import db_manager
+    db_manager.initialize(
+        str(db),
+        str(pathlib.Path(__file__).resolve().parents[1] / "db" / "schema.sql"),
+    )
+    for pub, img, sku, ver, arch, label, state in rows:
+        db_manager.check_and_upsert(str(db), pub, img, sku, ver, "eastus", arch,
+                                    "apt", label)
+        if state:
+            db_manager.set_validation_state(
+                str(db), (pub, img, sku, "eastus", arch), state,
+                reason="plan not accepted" if state == "known_unsupported" else "")
+    return db
+
+
+def test_coverage_lists_a_distro_no_run_touched(tmp_path, monkeypatch):
+    # SLES has never been handed to Phase 2, so it appears in no run's tables.
+    # The whole point of the coverage view is that it still shows up.
+    db = _cov_db(tmp_path, [
+        ("SUSE", "sles-15-sp7-arm64", "gen2", "2026.08.27", "arm64", "SLES 15", None),
+    ])
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    rows = record_result._coverage_rows()
+
+    assert [(r["label"], r["arch"], r["status"]) for r in rows] == [
+        ("SLES 15", "arm64", "not yet validated")
+    ]
+
+
+def test_coverage_reports_one_row_per_release_and_arch(tmp_path, monkeypatch):
+    # A release owns many SKUs whose states disagree; listing them all would
+    # show the same release as supported AND unsupported at once.
+    db = _cov_db(tmp_path, [
+        ("Canonical", "ubuntu-22_04-lts", "server", "22.04.3", "x86_64", "Ubuntu 22.04", None),
+        ("Canonical", "0001-com-ubuntu-pro-jammy-fips", "pro-fips-22_04", "22.04.1",
+         "x86_64", "Ubuntu 22.04", "known_unsupported"),
+    ])
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    rows = record_result._coverage_rows()
+
+    assert len(rows) == 1
+    # The plain image is what the pipeline validates, so its state is the truth.
+    assert rows[0]["image"] == "ubuntu-22_04-lts/server"
+    assert rows[0]["status"] == "not yet validated"
+
+
+def test_coverage_excludes_out_of_matrix_distros(tmp_path, monkeypatch):
+    db = _cov_db(tmp_path, [
+        ("Debian", "debian-11", "11", "11.0.1", "x86_64", "Debian 11", None),
+    ])
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    assert record_result._coverage_rows() == []
+
+
+def test_coverage_never_breaks_the_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(tmp_path / "missing.db"))
+
+    assert record_result._coverage_rows() == []
+
+
+def test_coverage_survives_a_top_level_import_miss(tmp_path, monkeypatch):
+    # scripts/ is on PYTHONPATH under Actions, but only the repo root is when
+    # this is imported as a package. Losing the table there would be silent.
+    import builtins
+
+    db = _cov_db(tmp_path, [
+        ("SUSE", "sles-16-0-arm64", "gen2", "2026.08.05", "arm64", "SLES 16", None),
+    ])
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    real_import = builtins.__import__
+
+    def no_top_level(name, *args, **kwargs):
+        if name in ("aznfs_support", "db_manager"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_top_level)
+
+    assert [r["label"] for r in record_result._coverage_rows()] == ["SLES 16"]
+
+
+def test_coverage_renders_pending_publish_readably_and_keeps_its_reason(
+    tmp_path, monkeypatch
+):
+    # Nothing writes this state today, but it is valid per db_manager and the
+    # schema, and there the reason IS the action: publish the package.
+    db = _cov_db(tmp_path, [
+        ("Canonical", "ubuntu-26_04-lts", "server", "26.04.1", "x86_64",
+         "Ubuntu 26.04", None),
+    ])
+    import db_manager
+    db_manager.set_validation_state(
+        str(db), ("Canonical", "ubuntu-26_04-lts", "server", "eastus", "x86_64"),
+        "pending_publish", reason="publish aznfs 0.3.458 to prod, then re-run")
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    row = record_result._coverage_rows()[0]
+
+    assert row["status"] == "awaiting manual publish"   # not the raw token
+    assert "publish aznfs" in row["reason"]

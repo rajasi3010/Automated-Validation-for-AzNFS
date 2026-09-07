@@ -253,6 +253,73 @@ def _table_html(title: str, columns: List[Tuple[str, str]], rows: List[Dict[str,
     )
 
 
+_COVERAGE_TITLES = {
+    "known_supported": "supported",
+    "known_unsupported": "unsupported",
+    "pending_publish": "awaiting manual publish",
+    "unknown": "not yet validated",
+}
+
+# States where the reason is the actionable part; a supported row has none, and
+# an unvalidated one has nothing to explain yet.
+_COVERAGE_REASON_STATES = ("known_unsupported", "pending_publish")
+
+
+def _coverage_rows() -> List[Dict[str, str]]:
+    """Every in-matrix release/arch and where it currently stands.
+
+    A run only validates the releases handed to it, so its own tables say
+    nothing about the rest -- a distro Phase 2 already ruled out, or one nothing
+    has reached yet, is simply absent. That reads as "missing" rather than
+    "elsewhere", so the whole matrix is restated here.
+
+    One row per release/arch, reporting the SKU the pipeline would actually
+    validate. Reporting every SKU instead would list the same release as
+    supported AND unsupported AND unvalidated at once, because a release owns
+    dozens of SKUs whose states disagree.
+    """
+    try:
+        import aznfs_support
+        import db_manager
+    except ModuleNotFoundError:
+        # scripts/ is on PYTHONPATH in CI, but only the repo root is on it when
+        # the module is imported as a package, as _notify() already allows for.
+        try:
+            from scripts import aznfs_support  # type: ignore
+            from scripts import db_manager  # type: ignore
+        except ModuleNotFoundError:
+            logger.warning("Phase 1 helpers unavailable; skipping the coverage table")
+            return []
+    try:
+        records = db_manager.get_all_records(config.DB_PATH)
+    except Exception:
+        logger.exception("could not build the coverage table")
+        return []
+
+    best: Dict[Tuple[str, str], Dict] = {}
+    for r in records:
+        label = r.get("distro_label", "")
+        if not aznfs_support.is_supported_distro(label):
+            continue
+        key = (label, r.get("architecture", ""))
+        cur = best.get(key)
+        if cur is None or aznfs_support.is_preferred_image(
+                r, cur, db_manager.version_tuple):
+            best[key] = r
+
+    rows: List[Dict[str, str]] = []
+    for (label, arch), r in sorted(best.items()):
+        state = r.get("validated") or "unknown"
+        rows.append({
+            "label": label,
+            "arch": arch,
+            "status": _COVERAGE_TITLES.get(state, state),
+            "image": f"{r.get('image', '')}/{r.get('sku', '')}",
+            "reason": (r.get("reason") or "") if state in _COVERAGE_REASON_STATES else "",
+        })
+    return rows
+
+
 def _send_summary(
     processed: int,
     supported: List[Dict[str, str]],
@@ -263,6 +330,7 @@ def _send_summary(
     """The single end-of-run e-mail: pass / fail (+ package/image-regression) tables."""
     regressions = regressions or []
     infra_errors = infra_errors or []
+    coverage = _coverage_rows()
     reg_subject = f", {len(regressions)} regressed" if regressions else ""
     infra_subject = f", {len(infra_errors)} untestable" if infra_errors else ""
     subject = (
@@ -286,7 +354,9 @@ def _send_summary(
         f"c) Regressions (newer AzNFS or new image failed; kept known_supported) ({len(regressions)}):\n"
         f"{_plain(regressions, ['label', 'arch', 'urn', 'logs_url', 'reason'])}\n\n"
         f"d) Could NOT be tested -- infrastructure, no verdict recorded, will retry ({len(infra_errors)}):\n"
-        f"{_plain(infra_errors, ['label', 'arch', 'urn', 'logs_url', 'reason'])}"
+        f"{_plain(infra_errors, ['label', 'arch', 'urn', 'logs_url', 'reason'])}\n\n"
+        f"e) Where every supported distro stands ({len(coverage)}):\n"
+        f"{_plain(coverage, ['label', 'arch', 'status', 'image', 'reason'])}"
     )
 
     html_body = (
@@ -331,6 +401,18 @@ def _send_summary(
                 ("reason", "Reason"),
             ],
             infra_errors,
+        )
+        + _table_html(
+            f"e) Where every supported distro stands ({len(coverage)}) "
+            "&mdash; including releases this run did not touch",
+            [
+                ("label", "Distro"),
+                ("arch", "Arch"),
+                ("status", "Status"),
+                ("image", "Image validated"),
+                ("reason", "Reason"),
+            ],
+            coverage,
         )
         + "</div>"
     )
