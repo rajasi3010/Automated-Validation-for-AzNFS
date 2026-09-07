@@ -27,7 +27,13 @@ BRANCH="${STATUS_BRANCH:-status-page}"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git add STATUS.md
-git commit -m "chore: refresh AzNFS validation status page [skip ci]"
+# Without this guard a failed commit still reaches the push below, which would
+# force the checked-out branch tip onto status-page -- replacing the page with a
+# commit that does not contain it.
+if ! git commit -m "chore: refresh AzNFS validation status page [skip ci]"; then
+  echo "::warning::Could not commit the STATUS.md refresh; not pushing"
+  exit 0
+fi
 
 # The branch holds one throwaway commit per refresh, so overwrite it rather than
 # rebasing: there is no history worth preserving and nothing else writes here.
