@@ -118,3 +118,32 @@ def test_monthly_reminder_reason_column_for_unsupported_only(notifier):
     assert html_body.count(">Reason<") == 1
     assert "prod repo is missing" in html_body
     assert "prod repo is missing" in plain
+
+
+def test_monthly_reminder_shows_architecture_in_both_bodies(notifier):
+    # A release appears once per architecture, so a reader of either body has
+    # to be able to tell which half is which.
+    mod, email_client_cls = notifier
+    instance = email_client_cls.return_value
+    instance.begin_send.return_value.result.return_value = mock.Mock(id="msg-a")
+
+    buckets = {
+        "known_supported": [
+            {"distro_label": "Rocky 8", "architecture": "x86_64", "version": "8.9",
+             "publishers": ["resf"], "sku_count": 1, "reason": ""},
+        ],
+        "known_unsupported": [
+            {"distro_label": "Rocky 8", "architecture": "arm64", "version": "8.10",
+             "publishers": ["resf"], "sku_count": 1, "reason": "plan not accepted"},
+        ],
+        "unknown": [],
+    }
+    mod.send_monthly_reminder(buckets)
+
+    message = instance.begin_send.call_args[0][0]
+    plain = message["content"]["plainText"]
+    html = message["content"]["html"]
+
+    assert "Rocky 8 (x86_64)" in plain
+    assert "Rocky 8 (arm64)" in plain
+    assert ">Arch<" in html

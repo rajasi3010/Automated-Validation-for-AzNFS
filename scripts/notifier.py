@@ -122,6 +122,7 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
                          with_skus: bool = False) -> str:
     cols = [
         ("distro_label", "Distro"),
+        ("architecture", "Arch"),
         ("version", "Latest version"),
         ("publishers", "Publishers"),
         ("sku_count", "# SKUs"),
@@ -206,7 +207,7 @@ def send_monthly_reminder(
         if rows:
             for d in rows:
                 line = (
-                    f"  - {d.get('distro_label')} "
+                    f"  - {d.get('distro_label')} ({d.get('architecture')}) "
                     f"(latest {d.get('version')}; {_fmt(d.get('publishers', []))}; "
                     f"{d.get('sku_count')} SKU(s))"
                 )
