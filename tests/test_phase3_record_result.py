@@ -591,3 +591,25 @@ def test_coverage_never_breaks_the_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(record_result.config, "DB_PATH", str(tmp_path / "missing.db"))
 
     assert record_result._coverage_rows() == []
+
+
+def test_coverage_survives_a_top_level_import_miss(tmp_path, monkeypatch):
+    # scripts/ is on PYTHONPATH under Actions, but only the repo root is when
+    # this is imported as a package. Losing the table there would be silent.
+    import builtins
+
+    db = _cov_db(tmp_path, [
+        ("SUSE", "sles-16-0-arm64", "gen2", "2026.08.05", "arm64", "SLES 16", None),
+    ])
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    real_import = builtins.__import__
+
+    def no_top_level(name, *args, **kwargs):
+        if name in ("aznfs_support", "db_manager"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_top_level)
+
+    assert [r["label"] for r in record_result._coverage_rows()] == ["SLES 16"]

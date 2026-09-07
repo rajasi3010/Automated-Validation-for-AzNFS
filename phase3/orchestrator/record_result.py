@@ -277,8 +277,14 @@ def _coverage_rows() -> List[Dict[str, str]]:
         import aznfs_support
         import db_manager
     except ModuleNotFoundError:
-        logger.warning("Phase 1 helpers unavailable; skipping the coverage table")
-        return []
+        # scripts/ is on PYTHONPATH in CI, but only the repo root is on it when
+        # the module is imported as a package, as _notify() already allows for.
+        try:
+            from scripts import aznfs_support  # type: ignore
+            from scripts import db_manager  # type: ignore
+        except ModuleNotFoundError:
+            logger.warning("Phase 1 helpers unavailable; skipping the coverage table")
+            return []
     try:
         records = db_manager.get_all_records(config.DB_PATH)
     except Exception:
