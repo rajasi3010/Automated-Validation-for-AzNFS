@@ -78,8 +78,11 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
 
     Buckets are ``known_supported`` / ``known_unsupported`` / ``unknown`` (the
     last also folds in the not-yet-decided ``pending_*`` states). For each
-    (state, distro_label) the latest version observed is kept, with the
-    contributing publishers and the number of SKUs. Returns {state: [distro,...]}.
+    (state, distro_label, architecture) the latest version observed is kept, with
+    the contributing publishers and the number of SKUs. Returns
+    {state: [distro,...]}. A release therefore appears once PER ARCHITECTURE,
+    and legitimately lands in different buckets when its arm64 and x86_64 SKUs
+    disagree -- which is the unit Phase 2 and Phase 3 actually validate.
 
     Distros outside the AzNFS support matrix are dropped by default: they are
     scanned and stored, but never handed to Phase 2/3, so reporting them as

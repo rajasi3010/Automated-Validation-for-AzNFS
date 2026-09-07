@@ -207,7 +207,7 @@ def send_monthly_reminder(
         if rows:
             for d in rows:
                 line = (
-                    f"  - {d.get('distro_label')} "
+                    f"  - {d.get('distro_label')} ({d.get('architecture')}) "
                     f"(latest {d.get('version')}; {_fmt(d.get('publishers', []))}; "
                     f"{d.get('sku_count')} SKU(s))"
                 )
