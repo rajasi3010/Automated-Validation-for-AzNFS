@@ -430,8 +430,10 @@ def main() -> int:
 
                     p_skus += 1
                     # Dedup: one row per (publisher, image, sku, region, arch).
-                    # Marketplace versions sort lexicographically (date-style).
-                    latest = max(versions)
+                    # Numeric, not lexicographic: an aggregate SKU carries every
+                    # minor of its release, so 8-LVM runs 8.0 .. 8.10 and a
+                    # string max would call 8.9 the newest for ever after.
+                    latest = max(versions, key=db_manager.version_tuple)
                     architecture = azure_client.get_image_architecture(
                         client, region, publisher, offer, sku, latest
                     )
