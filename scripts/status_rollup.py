@@ -88,13 +88,13 @@ def group_skus_by_reason(skus: list[dict]) -> list[tuple[str, list[dict]]]:
 def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[str, list[dict]]:
     """Group tracked images into per-validation-state buckets for the monthly reminder.
 
-    Buckets are ``known_supported`` / ``known_unsupported`` / ``unknown`` (the
-    last also folds in the not-yet-decided ``pending_*`` states). For each
-    (state, distro_label, architecture) the latest version observed is kept, with
-    the contributing publishers and the number of SKUs. Returns
-    {state: [distro,...]}. A release therefore appears once PER ARCHITECTURE,
-    and legitimately lands in different buckets when its arm64 and x86_64 SKUs
-    disagree -- which is the unit Phase 2 and Phase 3 actually validate.
+    Buckets are ``known_supported`` / ``known_unsupported`` / ``pending_publish``
+    / ``unknown``. Grouped by (distro_label, architecture) -- the unit Phase 2
+    and Phase 3 validate -- and each group's bucket, version and reason come from
+    the ONE SKU the pipeline would pick, so a release appears exactly once per
+    architecture and the row describes a single image rather than a blend of
+    several. Every SKU stays under ``skus`` with its own state, so a group whose
+    SKUs disagree is still inspectable. Returns {state: [distro,...]}.
 
     Distros outside the AzNFS support matrix are dropped by default: they are
     scanned and stored, but never handed to Phase 2/3, so reporting them as
@@ -130,7 +130,6 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
             g = {
                 "distro_label": key[0],
                 "architecture": key[1],
-                "version": img.get("version", ""),
                 "publishers": set(),
                 "sku_count": 0,
                 "skus": [],
@@ -141,9 +140,6 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
             g["rep"] = img
         if img.get("publisher"):
             g["publishers"].add(img["publisher"])
-        # Numeric: '9.10.x' is newer than '9.8.x' but sorts below it as a string.
-        if db_manager.version_tuple(img.get("version", "")) > db_manager.version_tuple(g["version"]):
-            g["version"] = img["version"]
         g["skus"].append({
             "image": img.get("image", ""),
             "sku": img.get("sku", ""),

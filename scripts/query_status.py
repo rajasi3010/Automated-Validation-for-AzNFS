@@ -130,8 +130,9 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
             if state in status_rollup.REASON_STATES and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
-            if state == "known_unsupported":
-                for reason, group in status_rollup.group_skus_by_reason(row.get("skus", [])):
+            if state in status_rollup.REASON_STATES:
+                for reason, group in status_rollup.group_skus_by_reason(
+                        status_rollup.reason_bearing_skus(row.get("skus"))):
                     for s in group:
                         lines.append(f"      * {status_rollup.sku_label(s)}")
                     if reason:

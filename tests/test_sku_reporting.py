@@ -178,3 +178,30 @@ def test_the_version_shown_belongs_to_the_image_shown():
 
     assert entry["image"] == "RHEL/7-LVM"
     assert entry["version"] == "7.9.2023032012"
+
+
+def test_text_output_names_only_the_skus_that_explain_the_bucket():
+    # Groups now hold passing SKUs too, so an unfiltered breakdown would list
+    # images that never failed under an actionable bucket.
+    records = [
+        _img("Ubuntu 26.04", "known_unsupported", "ubuntu-26_04-lts", "server",
+             reason="prod repo is missing"),
+        _img("Ubuntu 26.04", "known_supported", "ubuntu-26_04-lts", "minimal"),
+    ]
+
+    text = query_status.render_text(buckets_by_state(records))
+
+    assert "ubuntu-26_04-lts/server" in text
+    assert "ubuntu-26_04-lts/minimal" not in text
+
+
+def test_text_output_breaks_down_pending_publish_too():
+    # It was gated on known_unsupported, so the one state whose reason is an
+    # instruction got no per-SKU detail at all.
+    records = [_img("Ubuntu 26.04", "pending_publish", "ubuntu-26_04-lts", "server",
+                    reason="publish aznfs to prod")]
+
+    text = query_status.render_text(buckets_by_state(records))
+
+    assert "ubuntu-26_04-lts/server" in text
+    assert "publish aznfs to prod" in text

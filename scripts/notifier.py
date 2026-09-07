@@ -101,9 +101,9 @@ def send_phase1_summary(
     _send(subject, plain, html_body, recipients)
 
 
-# Validation-state display order + titles for the monthly reminder. The three
-# groups the monthly digest is split into; "unknown" also folds in the
-# not-yet-decided pending_* states (anything without a final supported verdict).
+# Validation-state display order + titles for the monthly reminder. pending_publish
+# is its own group: a release waiting on a manual publish is not the same as one
+# nobody has looked at yet, and the reason there is the action to take.
 _STATE_ORDER = ["known_supported", "known_unsupported", "pending_publish", "unknown"]
 _STATE_TITLES = {
     "known_supported": "Known supported",
@@ -172,10 +172,10 @@ def send_monthly_reminder(
 ) -> None:
     """Monthly reminder: every tracked distro release, grouped by validation state.
 
-    Three groups ΓÇö known_supported / known_unsupported / unknown (the last also
-    folds in the not-yet-decided pending_* states). ``buckets`` maps each state
-    key to a distro-rollup list (one entry per OS release, with its latest
-    version, contributing publishers and SKU count). Sent at most once per
+    Four groups — known_supported / known_unsupported / pending_publish / unknown.
+    ``buckets`` maps each state key to a distro-rollup list (one entry per OS
+    release and architecture, naming the image the pipeline would validate, that
+    image's version, contributing publishers and SKU count). Sent at most once per
     calendar month (on the first scan of the month), so the daily "nothing new"
     runs stay silent while the team still gets a periodic snapshot of everything
     tracked, by category.
