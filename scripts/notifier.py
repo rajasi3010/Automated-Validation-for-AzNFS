@@ -190,10 +190,15 @@ def send_monthly_reminder(
     total_skus = sum(d.get("sku_count", 0) for s in states for d in buckets.get(s, []))
     counts = {s: len(buckets.get(s, [])) for s in _STATE_ORDER}
 
+    # Named only when non-zero: nothing writes pending_publish today, so it would
+    # otherwise read as a permanent "0 awaiting publish" in every subject.
+    pending = counts.get("pending_publish", 0)
+    pending_subject = f", {pending} awaiting publish" if pending else ""
     subject = (
         f"[AzFilesAutoPackager] Monthly reminder: "
         f"{counts['known_supported']} supported, "
-        f"{counts['known_unsupported']} unsupported, "
+        f"{counts['known_unsupported']} unsupported"
+        f"{pending_subject}, "
         f"{counts['unknown']} unknown"
     )
 
@@ -234,7 +239,7 @@ def send_monthly_reminder(
     for st in states:
         rows = buckets.get(st, [])
         title = _STATE_TITLES.get(st, st)
-        # The verdict reason only applies to the known_unsupported bucket.
+        # Reasons belong to the actionable buckets, not just unsupported ones.
         with_reason = st in status_rollup.REASON_STATES
         sections += (
             f"<h4 style='font-family:Segoe UI,sans-serif;margin:12px 0 4px'>"
