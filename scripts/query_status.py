@@ -123,7 +123,8 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
         for row in rows:
             line = (
                 f"  - {row.get('distro_label')} ({row.get('architecture')}) "
-                f"(latest {row.get('version')}; {_fmt(row.get('publishers', []))}; "
+                f"({row.get('image')} {row.get('version')}; "
+                f"{_fmt(row.get('publishers', []))}; "
                 f"{row.get('sku_count')} SKU(s))"
             )
             if state in status_rollup.REASON_STATES and row.get("reason"):
@@ -182,8 +183,8 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
             out += ["_None._", ""]
             continue
         actionable = state in status_rollup.REASON_STATES
-        header = "| Distro | Arch | Latest image version | Publishers | SKUs |"
-        divider = "| --- | --- | --- | --- | ---: |"
+        header = "| Distro | Arch | Image validated | Version | Publishers | SKUs |"
+        divider = "| --- | --- | --- | --- | --- | ---: |"
         if actionable:
             header += " Reason |"
             divider += " --- |"
@@ -191,7 +192,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         for row in rows:
             line = (
                 f"| {row.get('distro_label', '')} | {row.get('architecture', '')} "
-                f"| {row.get('version', '')} "
+                f"| `{row.get('image', '')}` | {row.get('version', '')} "
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
             if actionable:

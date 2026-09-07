@@ -165,7 +165,7 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
             {
                 "distro_label": g["distro_label"],
                 "architecture": g["architecture"],
-                "version": g["version"],
+                "version": g["rep"].get("version", ""),
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
                 "reason": reason,

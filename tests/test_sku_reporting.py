@@ -163,3 +163,18 @@ def test_a_passing_release_carries_no_reason():
                     reason="a stale reason from an earlier verdict")]
 
     assert buckets_by_state(records)["known_supported"][0]["reason"] == ""
+
+
+def test_the_version_shown_belongs_to_the_image_shown():
+    # The row describes one image; taking the newest version across the group
+    # put a different SKU's version next to it. RHEL 7 advertised a 2026 image
+    # while the one actually validated was from 2023.
+    records = [
+        _img("RHEL 7", "known_supported", "RHEL", "7-LVM", version="7.9.2023032012"),
+        _img("RHEL 7", "", "RHEL-RAW", "7-raw", version="7.9.2026031104"),
+    ]
+
+    entry = [d for rows in buckets_by_state(records).values() for d in rows][0]
+
+    assert entry["image"] == "RHEL/7-LVM"
+    assert entry["version"] == "7.9.2023032012"
