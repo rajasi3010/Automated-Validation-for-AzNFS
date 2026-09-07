@@ -30,7 +30,8 @@ def test_rollup_carries_the_individual_skus():
     assert unsupported["sku_count"] == 1
     assert unsupported["skus"] == [{
         "image": "ubuntu-24_04-lts", "sku": "minimal-arm64", "architecture": "arm64",
-        "version": "24.04.1", "reason": "prod repo is missing",
+        "version": "24.04.1", "state": "known_unsupported",
+        "reason": "prod repo is missing",
     }]
     # The passing SKU stays visible under its own state.
     assert buckets["known_supported"][0]["skus"][0]["sku"] == "server"
@@ -114,3 +115,45 @@ def test_skus_with_no_reason_are_listed_without_a_dash():
     row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64", "reason": ""}]}
 
     assert query_status._sku_cell(row) == "`img/s (x86_64)`"
+
+
+def test_a_release_lands_in_exactly_one_bucket_per_arch():
+    # A release owns many SKUs whose states disagree. Bucketing each one put the
+    # same release under supported AND unsupported AND unvalidated at once, so
+    # the page could not answer "what is the state of this distro?".
+    records = [
+        _img("Ubuntu 22.04", "known_unsupported", "0001-com-ubuntu-pro-jammy-fips",
+             "pro-fips-22_04", reason="plan not accepted"),
+        _img("Ubuntu 22.04", "", "ubuntu-22_04-lts", "server"),
+        _img("Ubuntu 22.04", "known_supported", "ubuntu-22_04-lts-daily", "server"),
+    ]
+
+    buckets = buckets_by_state(records)
+    appearances = [
+        (state, d) for state, rows in buckets.items() for d in rows
+        if d["distro_label"] == "Ubuntu 22.04"
+    ]
+
+    assert len(appearances) == 1
+    state, entry = appearances[0]
+    # The plan-free plain image is what the pipeline validates, so its state wins.
+    assert entry["image"] == "ubuntu-22_04-lts/server"
+    assert state == "unknown"
+    assert entry["sku_count"] == 3          # the others stay visible underneath
+
+
+def test_pending_publish_is_its_own_bucket_and_keeps_its_reason():
+    records = [_img("Ubuntu 26.04", "pending_publish", "ubuntu-26_04-lts", "server",
+                    reason="publish aznfs to prod, then re-run")]
+
+    buckets = buckets_by_state(records)
+
+    assert [d["distro_label"] for d in buckets["pending_publish"]] == ["Ubuntu 26.04"]
+    assert buckets["pending_publish"][0]["reason"].startswith("publish aznfs")
+
+
+def test_a_passing_release_carries_no_reason():
+    records = [_img("Rocky 9", "known_supported", "rockylinux-x86_64", "9-base",
+                    reason="a stale reason from an earlier verdict")]
+
+    assert buckets_by_state(records)["known_supported"][0]["reason"] == ""

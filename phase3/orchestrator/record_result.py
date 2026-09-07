@@ -18,7 +18,9 @@ The DB row is matched on the SAME 5-key identity Phase 1/Phase 2 use
 import json
 import logging
 import os
+import pathlib
 import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
@@ -273,50 +275,45 @@ def _coverage_rows() -> List[Dict[str, str]]:
     has reached yet, is simply absent. That reads as "missing" rather than
     "elsewhere", so the whole matrix is restated here.
 
-    One row per release/arch, reporting the SKU the pipeline would actually
-    validate. Reporting every SKU instead would list the same release as
-    supported AND unsupported AND unvalidated at once, because a release owns
-    dozens of SKUs whose states disagree.
+    Built from the same rollup the status page and the monthly digest use, so
+    the three cannot disagree about a distro's state.
     """
     try:
-        import aznfs_support
+        import status_rollup
         import db_manager
     except ModuleNotFoundError:
-        # scripts/ is on PYTHONPATH in CI, but only the repo root is on it when
-        # the module is imported as a package, as _notify() already allows for.
+        # scripts/ is on PYTHONPATH in CI but not when only the repo root is.
+        # Put it on the path rather than importing as scripts.*: these helpers
+        # import each other by bare name, so the package spelling only moves the
+        # failure one level down.
+        scripts_dir = str(pathlib.Path(__file__).resolve().parents[2] / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
         try:
-            from scripts import aznfs_support  # type: ignore
-            from scripts import db_manager  # type: ignore
+            import status_rollup
+            import db_manager
         except ModuleNotFoundError:
             logger.warning("Phase 1 helpers unavailable; skipping the coverage table")
             return []
     try:
-        records = db_manager.get_all_records(config.DB_PATH)
+        buckets = status_rollup.buckets_by_state(
+            db_manager.get_all_records(config.DB_PATH)
+        )
     except Exception:
         logger.exception("could not build the coverage table")
         return []
 
-    best: Dict[Tuple[str, str], Dict] = {}
-    for r in records:
-        label = r.get("distro_label", "")
-        if not aznfs_support.is_supported_distro(label):
-            continue
-        key = (label, r.get("architecture", ""))
-        cur = best.get(key)
-        if cur is None or aznfs_support.is_preferred_image(
-                r, cur, db_manager.version_tuple):
-            best[key] = r
-
     rows: List[Dict[str, str]] = []
-    for (label, arch), r in sorted(best.items()):
-        state = r.get("validated") or "unknown"
-        rows.append({
-            "label": label,
-            "arch": arch,
-            "status": _COVERAGE_TITLES.get(state, state),
-            "image": f"{r.get('image', '')}/{r.get('sku', '')}",
-            "reason": (r.get("reason") or "") if state in _COVERAGE_REASON_STATES else "",
-        })
+    for state, entries in buckets.items():
+        for d in entries:
+            rows.append({
+                "label": d.get("distro_label", ""),
+                "arch": d.get("architecture", ""),
+                "status": _COVERAGE_TITLES.get(state, state),
+                "image": d.get("image", ""),
+                "reason": d.get("reason", "") or "",
+            })
+    rows.sort(key=lambda r: (r["label"], r["arch"]))
     return rows
 
 

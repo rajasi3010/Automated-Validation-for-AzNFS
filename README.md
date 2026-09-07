@@ -6,9 +6,12 @@ Linux images, checks whether the AzNFS package is published for them on PMC
 distro with **LISA**, and records a per-distro support decision — all unattended
 on a self-hosted runner.
 
-**➡ [Current validation status](STATUS.md)** — which distros are supported,
+**➡ [Current validation status](../../blob/status-page/STATUS.md)** — which distros are supported,
 unsupported (with the reason), or not yet validated. Regenerated automatically
 by the pipeline; no setup needed to read it.
+
+It lives on the `status-page` branch, not here: `master` is protected, so a push
+from CI is rejected and the page would silently freeze.
 
 ## Pipeline overview
 
@@ -299,12 +302,12 @@ the repo root) and `--include-excluded` shows distros normally hidden by
 `EXCLUDED_DISTRO_PREFIXES`. The rollup itself lives in `scripts/status_rollup.py`,
 shared with the monthly e-mail, so both always agree.
 
-The same rollup is published as [`STATUS.md`](STATUS.md) in the repo root, so
-anyone can read the current buckets on GitHub. Phase 3 regenerates it
-(`--format markdown`) via `.github/scripts/publish_status.sh` at the end of every
-run — after the verdicts are written — and commits it only when it changed; the
-page is also appended to the run's Actions summary. It is generated output —
-edit the pipeline, never the file.
+The same rollup is published as [`STATUS.md`](../../blob/status-page/STATUS.md) on the
+`status-page` branch, so anyone can read the current buckets on GitHub. Phase 3
+regenerates it (`--format markdown`) via `.github/scripts/publish_status.sh` at the end of every
+run — after the verdicts are written — and force-pushes one throwaway commit per
+refresh; the page is also appended to the run's Actions summary. It is generated
+output — edit the pipeline, never the file.
 
 **Phase 2.** Exactly **one** summary e-mail per run, listing every image and —
 for the actionable ones — the reason (to Phase 3, trusted, pending publish, or

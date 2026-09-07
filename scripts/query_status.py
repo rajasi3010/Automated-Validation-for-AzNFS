@@ -25,10 +25,11 @@ import aznfs_support
 import db_manager
 import status_rollup
 
-STATES = ("known_supported", "known_unsupported", "unknown")
+STATES = ("known_supported", "known_unsupported", "pending_publish", "unknown")
 _TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
+    "pending_publish": "Awaiting manual publish",
     "unknown": "Unknown / not yet validated",
 }
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -125,7 +126,7 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
                 f"(latest {row.get('version')}; {_fmt(row.get('publishers', []))}; "
                 f"{row.get('sku_count')} SKU(s))"
             )
-            if state == "known_unsupported" and row.get("reason"):
+            if state in status_rollup.REASON_STATES and row.get("reason"):
                 line += f" -- {row['reason']}"
             lines.append(line)
             if state == "known_unsupported":

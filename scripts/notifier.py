@@ -104,10 +104,11 @@ def send_phase1_summary(
 # Validation-state display order + titles for the monthly reminder. The three
 # groups the monthly digest is split into; "unknown" also folds in the
 # not-yet-decided pending_* states (anything without a final supported verdict).
-_STATE_ORDER = ["known_supported", "known_unsupported", "unknown"]
+_STATE_ORDER = ["known_supported", "known_unsupported", "pending_publish", "unknown"]
 _STATE_TITLES = {
     "known_supported": "Known supported",
     "known_unsupported": "Known unsupported",
+    "pending_publish": "Awaiting manual publish",
     "unknown": "Unknown (not yet validated)",
 }
 
@@ -211,12 +212,12 @@ def send_monthly_reminder(
                     f"(latest {d.get('version')}; {_fmt(d.get('publishers', []))}; "
                     f"{d.get('sku_count')} SKU(s))"
                 )
-                if st == "known_unsupported" and d.get("reason"):
+                if st in status_rollup.REASON_STATES and d.get("reason"):
                     line += f" -- {d['reason']}"
                 plain_parts.append(line)
                 # Name the exact images that failed: a distro release covers very
                 # different SKUs (server, minimal, cvm, pro, arm64).
-                if st == "known_unsupported":
+                if st in status_rollup.REASON_STATES:
                     for reason, group in status_rollup.group_skus_by_reason(d.get("skus", [])):
                         for s in group:
                             plain_parts.append(f"      * {status_rollup.sku_label(s)}")
@@ -232,7 +233,7 @@ def send_monthly_reminder(
         rows = buckets.get(st, [])
         title = _STATE_TITLES.get(st, st)
         # The verdict reason only applies to the known_unsupported bucket.
-        with_reason = st == "known_unsupported"
+        with_reason = st in status_rollup.REASON_STATES
         sections += (
             f"<h4 style='font-family:Segoe UI,sans-serif;margin:12px 0 4px'>"
             f"{html.escape(title)} "

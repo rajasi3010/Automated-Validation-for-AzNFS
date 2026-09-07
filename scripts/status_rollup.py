@@ -10,6 +10,9 @@ import re
 import aznfs_support
 import db_manager
 
+# States where the reason is the actionable part of the status.
+REASON_STATES = ("known_unsupported", "pending_publish")
+
 _DEFAULT_EXCLUDED_PREFIXES = "centos"
 
 _UUID_RE = re.compile(
@@ -97,65 +100,67 @@ def buckets_by_state(records: list[dict], in_scope_only: bool = True) -> dict[st
     """
     def _state_of(img: dict) -> str:
         v = img.get("validated", "") or ""
-        if v == "known_supported":
-            return "known_supported"
-        if v == "known_unsupported":
-            return "known_unsupported"
-        return "unknown"  # unknown + pending_publish + new
+        if v in ("known_supported", "known_unsupported", "pending_publish"):
+            return v
+        return "unknown"  # unknown + new
 
     if in_scope_only:
         records = [r for r in records
                    if aznfs_support.is_supported_distro(r.get("distro_label", ""))]
 
-    groups: dict[tuple[str, str, str], dict] = {}
+    # Keyed on (release, architecture) -- the unit Phase 2 and Phase 3 validate.
+    # The bucket comes from the ONE SKU the pipeline would actually pick, not
+    # from every SKU: a release owns dozens whose states disagree, so grouping
+    # by state as well would list the same release as supported AND unsupported
+    # AND unvalidated at once, and none of the three would be its real status.
+    groups: dict[tuple[str, str], dict] = {}
     for img in records:
-        state = _state_of(img)
-        # Architecture is part of the key because it is part of the unit Phase 2
-        # and Phase 3 validate: a release can pass on x86_64 and fail on arm64,
-        # and collapsing them puts one release in two buckets with no way to see
-        # which half is broken.
-        key = (state, img.get("distro_label", ""), img.get("architecture", ""))
+        key = (img.get("distro_label", ""), img.get("architecture", ""))
         g = groups.get(key)
         if g is None:
             g = {
-                "state": state,
-                "distro_label": key[1],
-                "architecture": key[2],
+                "distro_label": key[0],
+                "architecture": key[1],
                 "version": img.get("version", ""),
                 "publishers": set(),
                 "sku_count": 0,
-                "reasons": set(),
                 "skus": [],
+                "rep": img,
             }
             groups[key] = g
+        elif aznfs_support.is_preferred_image(img, g["rep"], db_manager.version_tuple):
+            g["rep"] = img
         if img.get("publisher"):
             g["publishers"].add(img["publisher"])
         # Numeric: '9.10.x' is newer than '9.8.x' but sorts below it as a string.
         if db_manager.version_tuple(img.get("version", "")) > db_manager.version_tuple(g["version"]):
             g["version"] = img["version"]
-        # Collect the distinct verdict reasons -- only meaningful for unsupported.
-        r = redact((img.get("reason") or "").strip())
-        if state == "known_unsupported" and r:
-            g["reasons"].add(r)
         g["skus"].append({
             "image": img.get("image", ""),
             "sku": img.get("sku", ""),
             "architecture": img.get("architecture", ""),
             "version": img.get("version", ""),
-            "reason": r,
+            "state": _state_of(img),
+            "reason": redact((img.get("reason") or "").strip()),
         })
         g["sku_count"] += 1
 
     buckets: dict[str, list[dict]] = {}
     for g in groups.values():
-        buckets.setdefault(g["state"], []).append(
+        state = _state_of(g["rep"])
+        # The reason belongs to the SKU that produced the verdict; on a passing
+        # or unvalidated release there is nothing to explain.
+        reason = (redact((g["rep"].get("reason") or "").strip())
+                  if state in REASON_STATES else "")
+        buckets.setdefault(state, []).append(
             {
                 "distro_label": g["distro_label"],
                 "architecture": g["architecture"],
                 "version": g["version"],
                 "publishers": sorted(g["publishers"]),
                 "sku_count": g["sku_count"],
-                "reason": "; ".join(sorted(g["reasons"])),
+                "reason": reason,
+                "image": f"{g['rep'].get('image', '')}/{g['rep'].get('sku', '')}",
                 "skus": sorted(g["skus"], key=lambda s: (s["architecture"], s["image"], s["sku"])),
             }
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Refresh the STATUS.md page committed in the repo so the current validation
+# Refresh the STATUS.md page published on its own branch so the current validation
 # buckets are visible on GitHub without running anything. Never fails the run.
 set -uo pipefail
 
@@ -17,11 +17,6 @@ fi
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   cat STATUS.md >> "$GITHUB_STEP_SUMMARY"
-fi
-
-if [ -z "$(git status --porcelain -- STATUS.md)" ]; then
-  echo "STATUS.md is already up to date."
-  exit 0
 fi
 
 # Generated content goes to its own branch: master is protected (reviews are
