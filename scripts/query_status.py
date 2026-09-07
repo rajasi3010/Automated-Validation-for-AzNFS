@@ -140,8 +140,13 @@ def render_text(buckets: dict[str, list[dict]]) -> str:
 
 
 def _sku_cell(row: dict) -> str:
-    """Failing images for one distro, grouped so a shared reason is stated once."""
-    skus = row.get("skus") or []
+    """Why this release is in its bucket, per image.
+
+    The group holds every SKU of the release, passing ones included, so only the
+    SKUs whose own state carries a reason are named -- listing the rest would
+    imply they failed too.
+    """
+    skus = status_rollup.reason_bearing_skus(row.get("skus"))
     if not skus:
         return row.get("reason") or "-"
     parts = []
@@ -176,11 +181,11 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         if not rows:
             out += ["_None._", ""]
             continue
-        unsupported = state == "known_unsupported"
+        actionable = state in status_rollup.REASON_STATES
         header = "| Distro | Arch | Latest image version | Publishers | SKUs |"
         divider = "| --- | --- | --- | --- | ---: |"
-        if unsupported:
-            header += " Failing SKUs |"
+        if actionable:
+            header += " Reason |"
             divider += " --- |"
         out += [header, divider]
         for row in rows:
@@ -189,7 +194,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
                 f"| {row.get('version', '')} "
                 f"| {_fmt(row.get('publishers', []))} | {row.get('sku_count', 0)} |"
             )
-            if unsupported:
+            if actionable:
                 line += f" {_sku_cell(row)} |"
             out.append(line)
         out.append("")

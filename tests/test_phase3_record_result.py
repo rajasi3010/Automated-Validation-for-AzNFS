@@ -612,8 +612,8 @@ def test_coverage_works_with_only_the_repo_root_on_the_path(tmp_path):
     )
     proc = subprocess.run(
         [sys.executable, "-c", code], cwd=root, capture_output=True, text=True,
-        env={"PYTHONPATH": str(root), "AZURE_SUBSCRIPTION_ID": "dummy",
-             "PATH": os.environ.get("PATH", "")},
+        env={**os.environ, "PYTHONPATH": str(root),
+             "AZURE_SUBSCRIPTION_ID": "dummy"},
     )
 
     assert proc.returncode == 0, proc.stderr

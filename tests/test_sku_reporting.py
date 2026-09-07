@@ -52,7 +52,8 @@ def test_digest_email_names_the_failing_skus(monkeypatch):
         "distro_label": "Ubuntu 24.04", "version": "24.04.1", "publishers": ["Canonical"],
         "sku_count": 1, "reason": "prod repo is missing",
         "skus": [{"image": "ubuntu-24_04-lts", "sku": "minimal-arm64",
-                  "architecture": "arm64", "reason": "prod repo is missing"}],
+                  "architecture": "arm64", "state": "known_unsupported",
+                  "reason": "prod repo is missing"}],
     }]}
     sent = {}
 
@@ -87,8 +88,10 @@ def test_skus_sharing_a_reason_are_listed_once_with_it():
     # Whole releases usually fail identically; repeating a 70-char reason per
     # SKU buries the one thing that matters -- which images are affected.
     skus = [
-        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
-        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
         {"image": "debian-11-daily", "sku": "11-arm", "architecture": "arm64", "reason": "repo missing"},
     ]
 
@@ -100,8 +103,10 @@ def test_skus_sharing_a_reason_are_listed_once_with_it():
 
 def test_markdown_cell_states_a_shared_reason_once():
     row = {"skus": [
-        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64", "reason": "no packages"},
-        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
+        {"image": "debian-11-daily", "sku": "11-gen2", "architecture": "x86_64",
+         "state": "known_unsupported", "reason": "no packages"},
     ]}
 
     cell = query_status._sku_cell(row)
@@ -112,7 +117,8 @@ def test_markdown_cell_states_a_shared_reason_once():
 
 
 def test_skus_with_no_reason_are_listed_without_a_dash():
-    row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64", "reason": ""}]}
+    row = {"skus": [{"image": "img", "sku": "s", "architecture": "x86_64",
+                            "state": "known_unsupported", "reason": ""}]}
 
     assert query_status._sku_cell(row) == "`img/s (x86_64)`"
 

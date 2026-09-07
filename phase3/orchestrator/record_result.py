@@ -262,10 +262,6 @@ _COVERAGE_TITLES = {
     "unknown": "not yet validated",
 }
 
-# States where the reason is the actionable part; a supported row has none, and
-# an unvalidated one has nothing to explain yet.
-_COVERAGE_REASON_STATES = ("known_unsupported", "pending_publish")
-
 
 def _coverage_rows() -> List[Dict[str, str]]:
     """Every in-matrix release/arch and where it currently stands.

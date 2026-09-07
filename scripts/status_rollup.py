@@ -63,6 +63,15 @@ def sku_label(sku: dict) -> str:
     return f"{sku.get('image', '')}/{sku.get('sku', '')} ({sku.get('architecture', '')})"
 
 
+def reason_bearing_skus(skus: list[dict]) -> list[dict]:
+    """The SKUs that explain a release's bucket.
+
+    A group holds every SKU of the release, passing ones included, so naming all
+    of them under an actionable bucket would imply they all failed.
+    """
+    return [s for s in (skus or []) if s.get("state") in REASON_STATES]
+
+
 def group_skus_by_reason(skus: list[dict]) -> list[tuple[str, list[dict]]]:
     """Collapse SKUs that failed identically, so the reason is stated once.
 

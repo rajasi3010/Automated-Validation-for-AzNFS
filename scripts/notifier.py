@@ -145,7 +145,7 @@ def _reminder_table_html(distros: list[dict], with_reason: bool = False,
         if with_skus and d.get("skus"):
             body += (
                 f"<tr><td colspan='{len(cols)}' style='padding:2px 8px 8px 24px;"
-                f"font-size:12px;color:#555'>{_sku_list_html(d['skus'])}</td></tr>"
+                f"font-size:12px;color:#555'>{_sku_list_html(status_rollup.reason_bearing_skus(d['skus']))}</td></tr>"
             )
     return (
         "<table style='border-collapse:collapse;font-family:Segoe UI,sans-serif;"
@@ -218,7 +218,8 @@ def send_monthly_reminder(
                 # Name the exact images that failed: a distro release covers very
                 # different SKUs (server, minimal, cvm, pro, arm64).
                 if st in status_rollup.REASON_STATES:
-                    for reason, group in status_rollup.group_skus_by_reason(d.get("skus", [])):
+                    for reason, group in status_rollup.group_skus_by_reason(
+                            status_rollup.reason_bearing_skus(d.get("skus"))):
                         for s in group:
                             plain_parts.append(f"      * {status_rollup.sku_label(s)}")
                         if reason:
