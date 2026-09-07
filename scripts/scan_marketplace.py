@@ -256,6 +256,28 @@ def dedup_backlog(records: list[dict]) -> list[dict]:
     )
 
 
+def best_images_for_changed(changed: list[dict], all_records: list[dict]) -> list[dict]:
+    """Map changed SKUs to the SKU worth validating for each affected release.
+
+    A marketplace refresh tells us a release needs re-checking; it does not say
+    the refreshed SKU is the one to test. Publishers rebuild `pro`, `fips` and
+    `minimal` variants far more often than the plain server image, and those
+    carry a purchase plan this subscription cannot accept, so emitting whatever
+    happened to change means a release gets validated on an image that can never
+    deploy. Re-select from every tracked SKU of the affected (release,
+    architecture) instead, using the same deployability-first pick as the
+    backlog feed.
+    """
+    touched = {
+        (r.get("distro_label", ""), r.get("architecture", "")) for r in changed
+    }
+    candidates = [
+        r for r in all_records
+        if (r.get("distro_label", ""), r.get("architecture", "")) in touched
+    ]
+    return dedup_backlog(candidates)
+
+
 def format_phase2_input(records: list[dict]) -> list[dict]:
     """Prepare Phase 2 input rows with stable fields.
 
@@ -459,13 +481,17 @@ def main() -> int:
     # Emit new SKUs AND updated ones (a newer marketplace image version of a
     # tracked SKU) so a refreshed image is re-validated. Gate 3 still decides
     # whether the AzNFS package actually changed, so an unchanged package just
-    # stays trusted (no VM).
-    phase2_input = format_phase2_input(_exclude_distros(new_images + updated_images))
+    # stays trusted (no VM). The changed SKU selects the RELEASE to re-check;
+    # which image that release is validated on is re-picked from the DB.
+    all_records = _exclude_distros(db_manager.get_all_records(config.DB_PATH))
+    changed = _exclude_distros(new_images + updated_images)
+    phase2_input = format_phase2_input(best_images_for_changed(changed, all_records))
     with open(config.OUTPUT_JSON, "w", encoding="utf-8") as fh:
         json.dump(phase2_input, fh, indent=2)
     logger.info(
-        "Wrote %d entry(ies) to %s (the Phase 2 hand-off).",
-        len(phase2_input), config.OUTPUT_JSON,
+        "Wrote %d entry(ies) to %s (the Phase 2 hand-off), re-picked from "
+        "%d changed SKU row(s).",
+        len(phase2_input), config.OUTPUT_JSON, len(changed),
     )
 
     # ------------------------------------------------------------------
@@ -476,8 +502,8 @@ def main() -> int:
     # Phase 2/3 marks it known_supported / known_unsupported. This distro view
     # drives the new-release diff and the e-mail; it is kept IN MEMORY ONLY ΓÇö
     # needs_validation.json (written above) is the single JSON artifact Phase 1
-    # produces (and Phase 2's input).
-    all_records = _exclude_distros(db_manager.get_all_records(config.DB_PATH))
+    # produces (and Phase 2's input). all_records was fetched for the hand-off
+    # above and is still current: nothing has written to the DB since.
 
     # ------------------------------------------------------------------
     # Step 5a-bis -- One-shot FULL re-validation reset (RESET_VALIDATION)
