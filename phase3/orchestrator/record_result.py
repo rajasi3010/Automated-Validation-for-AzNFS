@@ -256,8 +256,13 @@ def _table_html(title: str, columns: List[Tuple[str, str]], rows: List[Dict[str,
 _COVERAGE_TITLES = {
     "known_supported": "supported",
     "known_unsupported": "unsupported",
+    "pending_publish": "awaiting manual publish",
     "unknown": "not yet validated",
 }
+
+# States where the reason is the actionable part; a supported row has none, and
+# an unvalidated one has nothing to explain yet.
+_COVERAGE_REASON_STATES = ("known_unsupported", "pending_publish")
 
 
 def _coverage_rows() -> List[Dict[str, str]]:
@@ -310,7 +315,7 @@ def _coverage_rows() -> List[Dict[str, str]]:
             "arch": arch,
             "status": _COVERAGE_TITLES.get(state, state),
             "image": f"{r.get('image', '')}/{r.get('sku', '')}",
-            "reason": (r.get("reason") or "") if state == "known_unsupported" else "",
+            "reason": (r.get("reason") or "") if state in _COVERAGE_REASON_STATES else "",
         })
     return rows
 

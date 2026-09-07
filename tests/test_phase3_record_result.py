@@ -613,3 +613,24 @@ def test_coverage_survives_a_top_level_import_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_top_level)
 
     assert [r["label"] for r in record_result._coverage_rows()] == ["SLES 16"]
+
+
+def test_coverage_renders_pending_publish_readably_and_keeps_its_reason(
+    tmp_path, monkeypatch
+):
+    # Nothing writes this state today, but it is valid per db_manager and the
+    # schema, and there the reason IS the action: publish the package.
+    db = _cov_db(tmp_path, [
+        ("Canonical", "ubuntu-26_04-lts", "server", "26.04.1", "x86_64",
+         "Ubuntu 26.04", None),
+    ])
+    import db_manager
+    db_manager.set_validation_state(
+        str(db), ("Canonical", "ubuntu-26_04-lts", "server", "eastus", "x86_64"),
+        "pending_publish", reason="publish aznfs 0.3.458 to prod, then re-run")
+    monkeypatch.setattr(record_result.config, "DB_PATH", str(db))
+
+    row = record_result._coverage_rows()[0]
+
+    assert row["status"] == "awaiting manual publish"   # not the raw token
+    assert "publish aznfs" in row["reason"]
