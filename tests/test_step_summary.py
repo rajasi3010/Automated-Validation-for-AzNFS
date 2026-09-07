@@ -21,7 +21,10 @@ def test_summary_renders_a_row_per_release(tmp_path, monkeypatch):
     scan_marketplace.write_step_summary(_ROLLUP, total_tracked=42)
 
     text = out.read_text()
-    assert "1 distro release(s) tracked" in text
+    # The rollup is the unvalidated backlog, so the heading has to say that --
+    # "tracked" would read as the whole fleet, which is the 42.
+    assert "1 distro release(s) awaiting validation" in text
+    assert "42 SKU row(s) tracked" in text
     assert "| Ubuntu 24.04" in text
     assert "Canonical" in text
 

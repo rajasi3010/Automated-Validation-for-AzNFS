@@ -303,7 +303,10 @@ def write_step_summary(rollup: list[dict], total_tracked: int) -> None:
                 f"({total_tracked} SKU row(s) tracked)\n"
             )
         else:
-            lines.append(f"## {len(rollup)} distro release(s) tracked (cut-down list)\n")
+            lines.append(
+                f"## {len(rollup)} distro release(s) awaiting validation "
+                f"({total_tracked} SKU row(s) tracked)\n"
+            )
             lines.append(
                 "_One row per OS release \u2014 SKU/version/region/architecture "
                 "collapsed to counts._\n"
