@@ -13,6 +13,12 @@ permissions:
   actions: read
   contents: write
 
+# Cache adoption can initialize the shared database, so queue behind any phase
+# that may be reading or writing the same file.
+concurrency:
+  group: marketplace-db
+  cancel-in-progress: false
+
 jobs:
   watchdog:
     runs-on:
@@ -30,9 +36,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Read-only: the watchdog never writes the DB, it only needs it to
-      # regenerate the status page below. It must read the same shared copy
-      # the phases write, or the page it publishes would be stale.
+      # The watchdog normally reads the DB to regenerate the status page. On a
+      # fresh runner it may initialize the shared copy from the cache first.
       - name: Locate the shared database
         id: db
         run: |
