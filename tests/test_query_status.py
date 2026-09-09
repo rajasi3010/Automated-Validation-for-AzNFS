@@ -122,12 +122,23 @@ def test_reasons_are_redacted_before_they_reach_the_published_page(tmp_path):
     assert "deployment failed" in reason  # the useful part survives
 
 
-def test_markdown_is_deterministic_so_the_page_only_changes_with_the_data(tmp_path):
-    # A baked-in timestamp would rewrite STATUS.md on every run and bury real
-    # changes under commit churn.
+def test_markdown_body_changes_only_with_the_data_not_the_timestamp(tmp_path):
+    # The report is regenerated every run, so only the generated-at line may
+    # differ between two renders of the same data.
     buckets = query_status.load_buckets(_db(tmp_path))
 
-    assert query_status.render_markdown(buckets) == query_status.render_markdown(buckets)
+    def body(text: str) -> list[str]:
+        return [line for line in text.splitlines() if not line.startswith("_Generated")]
+
+    earlier = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+    )
+    later = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 13, 45, tzinfo=timezone.utc)
+    )
+
+    assert earlier != later
+    assert body(earlier) == body(later)
 
 
 def test_out_of_matrix_distros_are_not_reported(tmp_path):
