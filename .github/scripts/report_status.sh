@@ -12,12 +12,18 @@ if [ ! -s "$DB" ]; then
 fi
 
 PY="$(command -v python3 || command -v python)"
+if [ -z "$PY" ]; then
+  echo "::warning::No python interpreter found; skipping the status report"
+  exit 0
+fi
 if ! "$PY" scripts/query_status.py --db "$DB" --format markdown --out STATUS.md; then
   echo "::warning::Could not generate the status report"
   exit 0
 fi
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  # An earlier step may have left the summary without a trailing newline.
+  printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
   cat STATUS.md >> "$GITHUB_STEP_SUMMARY"
   echo "Status report written to the run summary."
 else
