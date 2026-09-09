@@ -323,11 +323,21 @@ jobs:
       # 7. Persist the DB (validated-state updates) for the next run.
       # ----------------------------------------------------------------
       - name: Stage the database for the cache
+        id: stage
         if: always()
-        run: cp "$DB_PATH" marketplace.db 2>/dev/null || echo "::warning::No database to cache."
+        run: |
+          # A restore earlier in the job can leave a stale copy that would be saved as current.
+          rm -f marketplace.db
+          if [ -s "$DB_PATH" ]; then
+            cp "$DB_PATH" marketplace.db
+            echo "staged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "staged=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No database to cache."
+          fi
 
       - name: Save database cache
-        if: always()
+        if: always() && steps.stage.outputs.staged == 'true'
         uses: actions/cache/save@v4
         with:
           path: marketplace.db
