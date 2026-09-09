@@ -9,9 +9,11 @@ on:
     - cron: "30 06 * * *"   # ~3h after the 03:30 scan; covers the full chain
   workflow_dispatch:
 
+# A permissions block replaces the defaults, so every scope must be listed:
+# actions:read to query run history, contents:read for checkout.
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
   watchdog:
@@ -53,9 +55,3 @@ jobs:
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
         run: python scripts/chain_watchdog.py
-
-      # Daily heartbeat for the status page: Phase 3 is skipped when Phase 2
-      # fails, so without this the page could silently go stale for days.
-      - name: Publish STATUS.md
-        if: always()
-        run: bash .github/scripts/publish_status.sh

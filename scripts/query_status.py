@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import aznfs_support
 import db_manager
@@ -156,12 +157,22 @@ def _sku_cell(row: dict) -> str:
     return "<br>".join(parts)
 
 
-def render_markdown(buckets: dict[str, list[dict]]) -> str:
+def _utc_stamp(moment: datetime) -> str:
+    """Format as UTC, so the "UTC" suffix is true for any caller's datetime."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def render_markdown(
+    buckets: dict[str, list[dict]], generated_at: datetime | None = None
+) -> str:
     total_distros = sum(len(rows) for rows in buckets.values())
     total_skus = sum(row.get("sku_count", 0) for rows in buckets.values() for row in rows)
     counts = " | ".join(
         f"**{_TITLES.get(state, state)}:** {len(rows)}" for state, rows in buckets.items()
     )
+    stamp = _utc_stamp(generated_at or datetime.now(timezone.utc))
     out = [
         "# AzNFS validation status",
         "",
@@ -169,10 +180,10 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         "",
         counts,
         "",
-        # Deliberately no timestamp: it would change every run and commit churn
-        # would hide the real changes. The commit date is the freshness marker.
-        "_Generated automatically from the validation database by the AzNFS "
-        "pipeline; the commit date shows when it was last refreshed. "
+        # A timestamp is the only freshness marker this has: the report lives in
+        # a run summary, so there is no commit date to read it from.
+        "_Generated from the validation database by the AzNFS pipeline at "
+        f"{stamp}. "
         "Do not edit by hand._",
         "",
     ]

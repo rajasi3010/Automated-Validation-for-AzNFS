@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import db_manager
 import query_status
 
@@ -70,6 +72,29 @@ def test_text_output_lists_counts_and_reasons(tmp_path):
     assert "prod repo is missing" in text
 
 
+def test_markdown_timestamp_can_be_pinned_for_reproducible_output(tmp_path):
+    buckets = query_status.load_buckets(_db(tmp_path))
+    stamp = datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+
+    first = query_status.render_markdown(buckets, generated_at=stamp)
+
+    assert "2026-09-09 12:30 UTC" in first
+    assert first == query_status.render_markdown(buckets, generated_at=stamp)
+
+
+def test_markdown_timestamp_is_converted_to_utc(tmp_path):
+    buckets = query_status.load_buckets(_db(tmp_path))
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    aware = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 18, 0, tzinfo=ist)
+    )
+    naive = query_status.render_markdown(buckets, generated_at=datetime(2026, 9, 9, 12, 30))
+
+    assert "2026-09-09 12:30 UTC" in aware  # 18:00+05:30 is 12:30 UTC
+    assert "2026-09-09 12:30 UTC" in naive  # no tzinfo is taken as UTC
+
+
 def test_main_reports_missing_database(tmp_path, capsys):
     assert query_status.main(["--db", str(tmp_path / "nope.db")]) == 2
     assert "Database not found" in capsys.readouterr().err
@@ -97,12 +122,23 @@ def test_reasons_are_redacted_before_they_reach_the_published_page(tmp_path):
     assert "deployment failed" in reason  # the useful part survives
 
 
-def test_markdown_is_deterministic_so_the_page_only_changes_with_the_data(tmp_path):
-    # A baked-in timestamp would rewrite STATUS.md on every run and bury real
-    # changes under commit churn.
+def test_markdown_body_changes_only_with_the_data_not_the_timestamp(tmp_path):
+    # The report is regenerated every run, so only the generated-at line may
+    # differ between two renders of the same data.
     buckets = query_status.load_buckets(_db(tmp_path))
 
-    assert query_status.render_markdown(buckets) == query_status.render_markdown(buckets)
+    def body(text: str) -> list[str]:
+        return [line for line in text.splitlines() if not line.startswith("_Generated")]
+
+    earlier = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+    )
+    later = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 13, 45, tzinfo=timezone.utc)
+    )
+
+    assert earlier != later
+    assert body(earlier) == body(later)
 
 
 def test_out_of_matrix_distros_are_not_reported(tmp_path):
