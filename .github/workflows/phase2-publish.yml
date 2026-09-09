@@ -46,11 +46,11 @@ jobs:
 
       # ----------------------------------------------------------------
       # 2. The shared SQLite DB lives OUTSIDE the workspace. actions/checkout
-      #    runs `git clean -ffdx`, which deletes it, and the Actions cache
-      #    cannot be written at the end of a long job -- the runtime token has
-      #    expired by then, so every Phase 3 run over ~30 minutes lost its
-      #    verdicts. On this dedicated runner the file itself is the source of
-      #    truth; the cache is only a rebuild-from-scratch fallback.
+      #    runs `git clean -ffdx`, which deletes any copy inside it, and the
+      #    cache save that used to carry the file between runs has been denied
+      #    ("token has no writable scopes") on almost every Phase 3 run since
+      #    2026-06-30. On this dedicated runner the file itself is the source
+      #    of truth; the cache is only a fallback for a runner with no copy.
       # ----------------------------------------------------------------
       - name: Locate the shared database
         id: db
@@ -145,7 +145,8 @@ jobs:
           # automatically, so it must be mapped here to be honoured.
           PHASE3_IMAGE_REVALIDATE_DAYS: ${{ vars.PHASE3_IMAGE_REVALIDATE_DAYS }}
           # --- Paths ---
-          DB_PATH: marketplace.db
+          # DB_PATH comes from the "Locate the shared database" step via
+          # $GITHUB_ENV; setting it here would override that.
         run: |
           # Distro allow-list: the manual workflow_dispatch input wins; otherwise
           # fall back to the PHASE2_DISTROS repo variable so the automatic

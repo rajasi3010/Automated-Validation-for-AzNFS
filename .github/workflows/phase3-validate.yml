@@ -47,11 +47,12 @@ jobs:
 
       # ----------------------------------------------------------------
       # 2. The shared SQLite DB lives OUTSIDE the workspace. actions/checkout
-      #    runs `git clean -ffdx`, which deletes it, and the Actions cache
-      #    cannot be written at the end of a long job -- the runtime token has
-      #    expired by then, so every Phase 3 run over ~30 minutes lost its
-      #    verdicts. On this dedicated runner the file itself is the source of
-      #    truth; the cache is only a rebuild-from-scratch fallback.
+      #    runs `git clean -ffdx`, which deletes any copy inside it, and the
+      #    cache save that used to carry the file between runs has been denied
+      #    ("token has no writable scopes") on almost every run since
+      #    2026-06-30, so verdicts were written and then lost. On this
+      #    dedicated runner the file itself is the source of truth; the cache
+      #    is only a fallback for a runner with no copy yet.
       # ----------------------------------------------------------------
       - name: Locate the shared database
         id: db
@@ -212,8 +213,9 @@ jobs:
           ACS_ENDPOINT: ${{ vars.ACS_ENDPOINT }}
           ACS_SENDER: ${{ vars.ACS_SENDER }}
           NOTIFY_RECIPIENTS: ${{ vars.NOTIFY_RECIPIENTS }}
-          # --- Shared DB ---
-          DB_PATH: marketplace.db
+          # DB_PATH comes from the "Locate the shared database" step via
+          # $GITHUB_ENV. Setting it here would override that and send writes
+          # back into the workspace copy that checkout deletes.
           # --- LISA parallelism (bounded by the subscription's regional vCPU quota) ---
           LISA_VENV: ${{ vars.LISA_VENV }}
           PHASE3_CONCURRENCY: ${{ vars.PHASE3_CONCURRENCY }}

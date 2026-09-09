@@ -31,11 +31,24 @@ jobs:
         run: pip install -r requirements.txt
 
       # Read-only: the watchdog never writes the DB, it only needs it to
-      # regenerate the status page below.
-      - name: Restore database cache
+      # regenerate the status page below. It must read the same shared copy
+      # the phases write, or the page it publishes would be stale.
+      - name: Locate the shared database
+        id: db
+        run: |
+          mkdir -p "$HOME/aznfs-state"
+          echo "DB_PATH=$HOME/aznfs-state/marketplace.db" >> "$GITHUB_ENV"
+          if [ -s "$HOME/aznfs-state/marketplace.db" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore database cache (only when the runner has no copy)
+        if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
-          path: marketplace.db
+          path: ~/aznfs-state/marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
