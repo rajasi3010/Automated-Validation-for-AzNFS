@@ -26,6 +26,13 @@ on:
         type: boolean
         default: false
 
+# All three phases now write ONE database file on the runner instead of each
+# restoring its own copy, so the scan must queue behind a long Phase 3 rather
+# than write underneath it.
+concurrency:
+  group: marketplace-db
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on:
@@ -40,15 +47,29 @@ jobs:
         uses: actions/checkout@v4
 
       # ----------------------------------------------------------------
-      # 2. Restore the SQLite database from the previous run (if any).
-      #    On the very first run there is no cache yet — that is fine;
-      #    the script will create a fresh database automatically.
+      # 2. The shared SQLite DB lives OUTSIDE the workspace. actions/checkout
+      #    runs `git clean -ffdx`, which deletes it, and the Actions cache
+      #    cannot be written at the end of a long job -- the runtime token has
+      #    expired by then, so every Phase 3 run over ~30 minutes lost its
+      #    verdicts. On this dedicated runner the file itself is the source of
+      #    truth; the cache is only a rebuild-from-scratch fallback.
       # ----------------------------------------------------------------
-      - name: Restore database cache
-        id: cache-restore
+      - name: Locate the shared database
+        id: db
+        run: |
+          mkdir -p "$HOME/aznfs-state"
+          echo "DB_PATH=$HOME/aznfs-state/marketplace.db" >> "$GITHUB_ENV"
+          if [ -s "$HOME/aznfs-state/marketplace.db" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore database cache (only when the runner has no copy)
+        if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
-          path: marketplace.db
+          path: ~/aznfs-state/marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
@@ -134,5 +155,5 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: marketplace.db
+          path: ~/aznfs-state/marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}

@@ -46,17 +46,41 @@ jobs:
         uses: actions/checkout@v4
 
       # ----------------------------------------------------------------
-      # 2. Restore the shared SQLite DB (most recent, via the prefix key).
-      #    Phase 3 updates each validated distro's row, then re-saves the
-      #    cache under the same prefix so the next run sees it.
+      # 2. The shared SQLite DB lives OUTSIDE the workspace. actions/checkout
+      #    runs `git clean -ffdx`, which deletes it, and the Actions cache
+      #    cannot be written at the end of a long job -- the runtime token has
+      #    expired by then, so every Phase 3 run over ~30 minutes lost its
+      #    verdicts. On this dedicated runner the file itself is the source of
+      #    truth; the cache is only a rebuild-from-scratch fallback.
       # ----------------------------------------------------------------
-      - name: Restore database cache
+      - name: Locate the shared database
+        id: db
+        run: |
+          mkdir -p "$HOME/aznfs-state"
+          echo "DB_PATH=$HOME/aznfs-state/marketplace.db" >> "$GITHUB_ENV"
+          if [ -s "$HOME/aznfs-state/marketplace.db" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore database cache (only when the runner has no copy)
+        if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
-          path: marketplace.db
+          path: ~/aznfs-state/marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
+
+      # The failure this replaced was silent: verdicts were written, the cache
+      # save warned, and nobody noticed until distros drifted back to unknown.
+      # Printing the count either side makes a loss visible in the run itself.
+      - name: Database state (before)
+        if: always()
+        run: |
+          n=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM images WHERE validated <> 'unknown'" 2>/dev/null || echo "?")
+          echo "verdicts before this run: $n"
 
       # ----------------------------------------------------------------
       # 3. Fetch Phase 2's hand-off (lisa_jobs.json).
@@ -287,5 +311,15 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: marketplace.db
+          path: ~/aznfs-state/marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
+
+      # The failure this replaced was silent: verdicts were written, the cache
+      # save warned, and nobody noticed until distros drifted back to unknown.
+      # Printing the count either side makes a loss visible in the run itself.
+      - name: Database state (after)
+        if: always()
+        run: |
+          n=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM images WHERE validated <> 'unknown'" 2>/dev/null || echo "?")
+          echo "verdicts recorded in $DB_PATH: $n"
+          echo "verdicts recorded: **$n**" >> "$GITHUB_STEP_SUMMARY"
