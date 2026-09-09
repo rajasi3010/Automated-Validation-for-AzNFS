@@ -157,6 +157,13 @@ def _sku_cell(row: dict) -> str:
     return "<br>".join(parts)
 
 
+def _utc_stamp(moment: datetime) -> str:
+    """Format as UTC, so the "UTC" suffix is true for any caller's datetime."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def render_markdown(
     buckets: dict[str, list[dict]], generated_at: datetime | None = None
 ) -> str:
@@ -165,7 +172,7 @@ def render_markdown(
     counts = " | ".join(
         f"**{_TITLES.get(state, state)}:** {len(rows)}" for state, rows in buckets.items()
     )
-    stamp = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    stamp = _utc_stamp(generated_at or datetime.now(timezone.utc))
     out = [
         "# AzNFS validation status",
         "",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import db_manager
 import query_status
@@ -80,6 +80,19 @@ def test_markdown_timestamp_can_be_pinned_for_reproducible_output(tmp_path):
 
     assert "2026-09-09 12:30 UTC" in first
     assert first == query_status.render_markdown(buckets, generated_at=stamp)
+
+
+def test_markdown_timestamp_is_converted_to_utc(tmp_path):
+    buckets = query_status.load_buckets(_db(tmp_path))
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    aware = query_status.render_markdown(
+        buckets, generated_at=datetime(2026, 9, 9, 18, 0, tzinfo=ist)
+    )
+    naive = query_status.render_markdown(buckets, generated_at=datetime(2026, 9, 9, 12, 30))
+
+    assert "2026-09-09 12:30 UTC" in aware  # 18:00+05:30 is 12:30 UTC
+    assert "2026-09-09 12:30 UTC" in naive  # no tzinfo is taken as UTC
 
 
 def test_main_reports_missing_database(tmp_path, capsys):
