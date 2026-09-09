@@ -30,10 +30,8 @@ jobs:
       - self-hosted
       - azure-vm-marketplace
 
-    # Deliberately no `permissions:` block. Declaring one costs this job the
-    # ability to save the marketplace.db cache -- Phase 1 and Phase 2 declare
-    # none and save it fine, this job declared one and every verdict it wrote
-    # was discarded. Nothing here pushes, so the defaults are enough.
+    # No `permissions:` block: nothing in this job pushes any more, so the
+    # defaults are enough.
 
     steps:
       # ----------------------------------------------------------------

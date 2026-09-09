@@ -12,9 +12,8 @@ the reason), or not yet validated. Published as the **run summary of every
 and the table is on its summary page. No setup needed to read it.
 
 It is a run report rather than a committed file. `master` is protected, so a push
-from CI is rejected — and, less obviously, the `permissions:` block a job needs in
-order to push anywhere costs it the ability to save the shared database cache,
-which silently discarded every verdict Phase 3 produced.
+from CI is rejected, and the separate `status-page` branch it used to be pushed
+to went stale whenever a run failed before reaching that step.
 
 ## Pipeline overview
 

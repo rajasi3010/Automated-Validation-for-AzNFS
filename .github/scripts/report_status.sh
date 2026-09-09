@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Render the validation status into the run's Actions summary, as Phase 3's
 # result report. Nothing is committed or pushed: master is protected, so a push
-# from CI is rejected outright, and the `permissions:` block a job needs to push
-# elsewhere costs it the ability to save the marketplace.db cache -- which is
-# what silently discarded every verdict Phase 3 produced. Never fails the run.
+# from CI is rejected outright, and the status-page branch it used to push to
+# went stale whenever a run failed before reaching it. Never fails the run.
 set -uo pipefail
 
 DB="${DB_PATH:-marketplace.db}"
