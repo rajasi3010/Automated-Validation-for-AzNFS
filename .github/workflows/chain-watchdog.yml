@@ -15,6 +15,12 @@ permissions:
   actions: read
   contents: read
 
+# Cache adoption can initialize the shared database, so queue behind any phase
+# that may be reading or writing the same file.
+concurrency:
+  group: marketplace-db
+  cancel-in-progress: false
+
 jobs:
   watchdog:
     runs-on:
@@ -32,15 +38,34 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Read-only: the watchdog never writes the DB, it only needs it to
-      # regenerate the status page below.
-      - name: Restore database cache
+      # The watchdog normally reads the DB to regenerate the status page. On a
+      # fresh runner it may initialize the shared copy from the cache first.
+      - name: Locate the shared database
+        id: db
+        run: |
+          mkdir -p "$HOME/aznfs-state"
+          echo "DB_PATH=$HOME/aznfs-state/marketplace.db" >> "$GITHUB_ENV"
+          if [ -s "$HOME/aznfs-state/marketplace.db" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore database cache (only when the runner has no copy)
+        if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
           path: marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
+
+      - name: Adopt a restored cache
+        if: steps.db.outputs.present == 'false'
+        run: |
+          if [ -s marketplace.db ]; then
+            cp marketplace.db "$DB_PATH"
+          fi
 
       - name: Check phase hand-offs
         env:

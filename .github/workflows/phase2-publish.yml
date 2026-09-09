@@ -45,17 +45,45 @@ jobs:
         uses: actions/checkout@v4
 
       # ----------------------------------------------------------------
-      # 2. Restore the shared SQLite DB (most recent, via the prefix key).
-      #    Phase 2 updates each row's `validated` state, then re-saves the
-      #    cache under the same prefix so the next Phase 1 run sees it.
+      # 2. The shared SQLite DB lives OUTSIDE the workspace. actions/checkout
+      #    runs `git clean -ffdx`, which deletes any copy inside it, and the
+      #    cache save that used to carry the file between runs has been denied
+      #    ("token has no writable scopes") on almost every Phase 3 run since
+      #    2026-06-30. On this dedicated runner the file itself is the source
+      #    of truth; the cache is only a fallback for a runner with no copy.
       # ----------------------------------------------------------------
-      - name: Restore database cache
+      - name: Locate the shared database
+        id: db
+        run: |
+          mkdir -p "$HOME/aznfs-state"
+          echo "DB_PATH=$HOME/aznfs-state/marketplace.db" >> "$GITHUB_ENV"
+          if [ -s "$HOME/aznfs-state/marketplace.db" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The cache version is a hash of this path string, so changing it would
+      # hide every cache saved before the move and start a rebuilt runner from
+      # an empty database. Keep the old path and copy the file into place.
+      - name: Restore database cache (only when the runner has no copy)
+        if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
           path: marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
+
+      - name: Adopt a restored cache
+        if: steps.db.outputs.present == 'false'
+        run: |
+          if [ -s marketplace.db ]; then
+            cp marketplace.db "$DB_PATH"
+            echo "Adopted a restored cache into $DB_PATH."
+          else
+            echo "::warning::No cache restored; starting from an empty database."
+          fi
 
       # ----------------------------------------------------------------
       # 3. Python setup and dependency install
@@ -130,7 +158,8 @@ jobs:
           # automatically, so it must be mapped here to be honoured.
           PHASE3_IMAGE_REVALIDATE_DAYS: ${{ vars.PHASE3_IMAGE_REVALIDATE_DAYS }}
           # --- Paths ---
-          DB_PATH: marketplace.db
+          # DB_PATH comes from the "Locate the shared database" step via
+          # $GITHUB_ENV; setting it here would override that.
         run: |
           # Distro allow-list: the manual workflow_dispatch input wins; otherwise
           # fall back to the PHASE2_DISTROS repo variable so the automatic
@@ -167,8 +196,22 @@ jobs:
       # ----------------------------------------------------------------
       # 7. Persist the DB (validation-state updates) for the next run.
       # ----------------------------------------------------------------
-      - name: Save database cache
+      - name: Stage the database for the cache
+        id: stage
         if: always()
+        run: |
+          # A restore earlier in the job can leave a stale copy that would be saved as current.
+          rm -f marketplace.db
+          if [ -s "$DB_PATH" ]; then
+            cp "$DB_PATH" marketplace.db
+            echo "staged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "staged=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No database to cache."
+          fi
+
+      - name: Save database cache
+        if: always() && steps.stage.outputs.staged == 'true'
         uses: actions/cache/save@v4
         with:
           path: marketplace.db
