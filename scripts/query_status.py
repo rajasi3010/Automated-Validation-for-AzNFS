@@ -157,12 +157,15 @@ def _sku_cell(row: dict) -> str:
     return "<br>".join(parts)
 
 
-def render_markdown(buckets: dict[str, list[dict]]) -> str:
+def render_markdown(
+    buckets: dict[str, list[dict]], generated_at: datetime | None = None
+) -> str:
     total_distros = sum(len(rows) for rows in buckets.values())
     total_skus = sum(row.get("sku_count", 0) for rows in buckets.values() for row in rows)
     counts = " | ".join(
         f"**{_TITLES.get(state, state)}:** {len(rows)}" for state, rows in buckets.items()
     )
+    stamp = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
     out = [
         "# AzNFS validation status",
         "",
@@ -173,7 +176,7 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         # A timestamp is the only freshness marker this has: the report lives in
         # a run summary, so there is no commit date to read it from.
         "_Generated from the validation database by the AzNFS pipeline at "
-        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}. "
+        f"{stamp}. "
         "Do not edit by hand._",
         "",
     ]

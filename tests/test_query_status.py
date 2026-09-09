@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import db_manager
 import query_status
 
@@ -68,6 +70,16 @@ def test_text_output_lists_counts_and_reasons(tmp_path):
     assert "[Known supported] (1)" in text
     assert "[Known unsupported] (1)" in text
     assert "prod repo is missing" in text
+
+
+def test_markdown_timestamp_can_be_pinned_for_reproducible_output(tmp_path):
+    buckets = query_status.load_buckets(_db(tmp_path))
+    stamp = datetime(2026, 9, 9, 12, 30, tzinfo=timezone.utc)
+
+    first = query_status.render_markdown(buckets, generated_at=stamp)
+
+    assert "2026-09-09 12:30 UTC" in first
+    assert first == query_status.render_markdown(buckets, generated_at=stamp)
 
 
 def test_main_reports_missing_database(tmp_path, capsys):
