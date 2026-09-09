@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import aznfs_support
 import db_manager
@@ -169,10 +170,10 @@ def render_markdown(buckets: dict[str, list[dict]]) -> str:
         "",
         counts,
         "",
-        # Deliberately no timestamp: it would change every run and commit churn
-        # would hide the real changes. The commit date is the freshness marker.
-        "_Generated automatically from the validation database by the AzNFS "
-        "pipeline; the commit date shows when it was last refreshed. "
+        # A timestamp is the only freshness marker this has: the report lives in
+        # a run summary, so there is no commit date to read it from.
+        "_Generated from the validation database by the AzNFS pipeline at "
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}. "
         "Do not edit by hand._",
         "",
     ]
