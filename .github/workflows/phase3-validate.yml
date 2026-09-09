@@ -65,14 +65,27 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # The cache version is a hash of this path string, so changing it would
+      # hide every cache saved before the move and start a rebuilt runner from
+      # an empty database. Keep the old path and copy the file into place.
       - name: Restore database cache (only when the runner has no copy)
         if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
-          path: ~/aznfs-state/marketplace.db
+          path: marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
+
+      - name: Adopt a restored cache
+        if: steps.db.outputs.present == 'false'
+        run: |
+          if [ -s marketplace.db ]; then
+            cp marketplace.db "$DB_PATH"
+            echo "Adopted a restored cache into $DB_PATH."
+          else
+            echo "::warning::No cache restored; starting from an empty database."
+          fi
 
       # The failure this replaced was silent: verdicts were written, the cache
       # save warned, and nobody noticed until distros drifted back to unknown.
@@ -309,11 +322,15 @@ jobs:
       # ----------------------------------------------------------------
       # 7. Persist the DB (validated-state updates) for the next run.
       # ----------------------------------------------------------------
+      - name: Stage the database for the cache
+        if: always()
+        run: cp "$DB_PATH" marketplace.db 2>/dev/null || echo "::warning::No database to cache."
+
       - name: Save database cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ~/aznfs-state/marketplace.db
+          path: marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
 
       # The failure this replaced was silent: verdicts were written, the cache

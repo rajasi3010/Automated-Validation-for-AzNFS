@@ -48,10 +48,17 @@ jobs:
         if: steps.db.outputs.present == 'false'
         uses: actions/cache/restore@v4
         with:
-          path: ~/aznfs-state/marketplace.db
+          path: marketplace.db
           key: marketplace-db-v2-${{ github.run_id }}
           restore-keys: |
             marketplace-db-v2-
+
+      - name: Adopt a restored cache
+        if: steps.db.outputs.present == 'false'
+        run: |
+          if [ -s marketplace.db ]; then
+            cp marketplace.db "$DB_PATH"
+          fi
 
       - name: Check phase hand-offs
         env:
