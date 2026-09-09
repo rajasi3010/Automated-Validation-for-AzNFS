@@ -9,8 +9,11 @@ on:
     - cron: "30 06 * * *"   # ~3h after the 03:30 scan; covers the full chain
   workflow_dispatch:
 
+# A permissions block replaces the defaults, so every scope must be listed:
+# actions:read to query run history, contents:read for checkout.
 permissions:
   actions: read
+  contents: read
 
 jobs:
   watchdog:
